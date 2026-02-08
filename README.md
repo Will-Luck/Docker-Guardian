@@ -19,7 +19,7 @@ docker run -d \
   --restart=always \
   -e AUTOHEAL_CONTAINER_LABEL=all \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/lucknet/docker-guardian
+  ghcr.io/will-luck/docker-guardian
 ```
 
 ## The Problem
