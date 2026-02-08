@@ -73,6 +73,12 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 	return err
 }
 
+// StopContainer stops a running container with the given timeout.
+func (c *Client) StopContainer(ctx context.Context, id string, timeout int) error {
+	_, err := c.api.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
+	return err
+}
+
 // ContainerStatus returns the current status string of a container.
 func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error) {
 	info, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})

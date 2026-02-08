@@ -13,6 +13,7 @@ import (
 	"github.com/Will-Luck/Docker-Guardian/internal/docker"
 	"github.com/Will-Luck/Docker-Guardian/internal/guardian"
 	"github.com/Will-Luck/Docker-Guardian/internal/logging"
+	"github.com/Will-Luck/Docker-Guardian/internal/metrics"
 	"github.com/Will-Luck/Docker-Guardian/internal/notify"
 )
 
@@ -24,6 +25,10 @@ func main() {
 	}
 
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(1)
+	}
 	log := logging.New(cfg.LogJSON)
 
 	// Banner: plain stdout for acceptance test compatibility
@@ -48,6 +53,8 @@ func main() {
 	resolved := cfg.ResolvedNotifyEvents()
 	fmt.Printf("NOTIFY_EVENTS=%s (resolved: %s)\n", cfg.NotifyEvents, strings.Join(resolved, ","))
 
+	metrics.Serve(cfg.MetricsPort)
+
 	g := guardian.New(cfg, client, dispatcher, log)
 
 	if cfg.StartPeriod > 0 {
@@ -66,4 +73,6 @@ func main() {
 		log.Error("guardian exited with error", "error", err)
 		os.Exit(1)
 	}
+
+	dispatcher.Close()
 }

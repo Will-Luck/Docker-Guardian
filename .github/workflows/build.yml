@@ -13,6 +13,7 @@ env:
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -29,12 +30,49 @@ jobs:
         with:
           version: latest
 
-      - name: Unit tests
-        run: go test -race -count=1 ./...
+      - name: Unit tests with coverage
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+      - name: Display coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Build image for scanning
+        run: docker build -t docker-guardian:scan .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: docker-guardian:scan
+          format: table
+          exit-code: 0
+          severity: CRITICAL,HIGH
 
   test:
     needs: go
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -59,8 +97,37 @@ jobs:
       - name: Run notifications test
         run: GUARDIAN_IMAGE=docker-guardian bash tests/test-notifications.sh
 
+      - name: Run opt-out test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-opt-out.sh
+
+      - name: Run circuit breaker test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-circuit-breaker.sh
+
+      - name: Run custom label test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-custom-label.sh
+
+      - name: Capture docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker containers ==="
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || true
+          echo ""
+          for c in $(docker ps -a --filter "name=dg-test" --format "{{.Names}}"); do
+            echo "=== Logs: $c ==="
+            docker logs "$c" 2>&1 | tail -50
+            echo ""
+          done
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure-logs
+          path: /tmp/dg-test-logs/
+          if-no-files-found: ignore
+
   build:
-    needs: test
+    needs: [test, security]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
