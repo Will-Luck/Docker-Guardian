@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"time"
 
@@ -117,7 +118,7 @@ func (d *Dispatcher) dispatch(text string) {
 		services := d.ConfiguredServices()
 		for _, svc := range strings.Split(services, " ") {
 			if svc != "none" {
-				d.log.Info(fmt.Sprintf("%s [notify] → %s: %s", now, svc, text))
+				fmt.Printf("%s [notify] → %s: %s\n", now, svc, text)
 			}
 		}
 	}
@@ -195,13 +196,12 @@ func (d *Dispatcher) sendJSONWithHeader(url, headerKey, headerVal string, payloa
 	resp.Body.Close()
 }
 
-func (d *Dispatcher) sendForm(url string, fields map[string]string) {
-	var parts []string
+func (d *Dispatcher) sendForm(endpoint string, fields map[string]string) {
+	vals := url.Values{}
 	for k, v := range fields {
-		parts = append(parts, k+"="+v)
+		vals.Set(k, v)
 	}
-	body := strings.Join(parts, "&")
-	resp, err := d.client.Post(url, "application/x-www-form-urlencoded", strings.NewReader(body))
+	resp, err := d.client.Post(endpoint, "application/x-www-form-urlencoded", strings.NewReader(vals.Encode()))
 	if err != nil {
 		return
 	}

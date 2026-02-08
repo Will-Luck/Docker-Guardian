@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,13 +17,19 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	// Accept "autoheal" arg for backward compat with shell version's CMD ["autoheal"]
+	if len(os.Args) > 1 && os.Args[1] != "autoheal" {
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
+		os.Exit(1)
+	}
 
+	cfg := config.Load()
 	log := logging.New(cfg.LogJSON)
 
-	log.Info("Docker-Guardian (Go rewrite)")
-	log.Info("=============================================")
-	cfg.Print(log)
+	// Banner: plain stdout for acceptance test compatibility
+	fmt.Println("Docker-Guardian (Go rewrite)")
+	fmt.Println("=============================================")
+	cfg.PrintBanner()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
@@ -35,12 +42,16 @@ func main() {
 	defer client.Close()
 
 	dispatcher := notify.NewDispatcher(cfg, log)
-	log.Info("notifications", "services", dispatcher.ConfiguredServices(), "events", cfg.NotifyEvents)
+
+	// Notification banner: tests grep for "NOTIFICATIONS=.*gotify" and "NOTIFY_EVENTS=..."
+	fmt.Println("NOTIFICATIONS=" + dispatcher.ConfiguredServices())
+	resolved := cfg.ResolvedNotifyEvents()
+	fmt.Printf("NOTIFY_EVENTS=%s (resolved: %s)\n", cfg.NotifyEvents, strings.Join(resolved, ","))
 
 	g := guardian.New(cfg, client, dispatcher, log)
 
 	if cfg.StartPeriod > 0 {
-		log.Info("monitoring containers", "delay", fmt.Sprintf("%ds", cfg.StartPeriod))
+		fmt.Printf("Monitoring containers in %d second(s)\n", cfg.StartPeriod)
 		select {
 		case <-time.After(time.Duration(cfg.StartPeriod) * time.Second):
 		case <-ctx.Done():

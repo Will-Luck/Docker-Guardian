@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/moby/moby/api/types/events"
@@ -13,10 +14,10 @@ import (
 // (the Watchtower signature).
 func (c *Client) ContainerEvents(ctx context.Context, since time.Time, until time.Time, orchestrationOnly bool) ([]events.Message, error) {
 	opts := client.EventsListOptions{
-		Since: since.Format(time.RFC3339Nano),
-		Until: until.Format(time.RFC3339Nano),
+		Since:   since.Format(time.RFC3339Nano),
+		Until:   until.Format(time.RFC3339Nano),
+		Filters: make(client.Filters).Add("type", "container"),
 	}
-	opts.Filters = opts.Filters.Add("type", "container")
 	if orchestrationOnly {
 		opts.Filters = opts.Filters.Add("action", "destroy", "create")
 	}
@@ -32,6 +33,9 @@ func (c *Client) ContainerEvents(ctx context.Context, since time.Time, until tim
 			}
 			msgs = append(msgs, msg)
 		case err := <-result.Err:
+			if err == io.EOF {
+				return msgs, nil
+			}
 			return msgs, err
 		}
 	}

@@ -26,8 +26,9 @@ func (g *Guardian) checkUnhealthy(ctx context.Context) {
 		shortID := id[:12]
 		name := strings.TrimPrefix(c.Names[0], "/")
 
-		if c.State == "restarting" {
-			g.log.Info("container is restarting, skipping", "container", name, "id", shortID)
+		if string(c.State) == "restarting" {
+			now := time.Now().Format("02-01-2006 15:04:05")
+			fmt.Printf("%s Container %s (%s) found to be restarting - don't restart\n", now, name, shortID)
 			continue
 		}
 
@@ -43,8 +44,8 @@ func (g *Guardian) checkUnhealthy(ctx context.Context) {
 		}
 
 		now := time.Now().Format("02-01-2006 15:04:05")
-		g.log.Info(fmt.Sprintf("%s Container %s (%s) found to be unhealthy - Restarting container now with %ds timeout",
-			now, name, shortID, timeout))
+		fmt.Printf("%s Container %s (%s) found to be unhealthy - Restarting container now with %ds timeout\n",
+			now, name, shortID, timeout)
 
 		if err := g.docker.RestartContainer(ctx, id, timeout); err != nil {
 			g.log.Error("failed to restart container", "container", name, "id", shortID, "error", err)

@@ -8,6 +8,7 @@ import (
 	"github.com/Will-Luck/Docker-Guardian/internal/docker"
 	"github.com/Will-Luck/Docker-Guardian/internal/logging"
 	"github.com/Will-Luck/Docker-Guardian/internal/notify"
+	"github.com/moby/moby/api/types/events"
 )
 
 // Guardian orchestrates the main monitoring loop.
@@ -17,6 +18,11 @@ type Guardian struct {
 	dispatcher *notify.Dispatcher
 	log        *logging.Logger
 	cycle      int
+
+	// Per-cycle caches (reset at start of each cycle)
+	orchestratorEvents []events.Message
+	orchestratorCached bool
+	backupRunning      *bool
 }
 
 // New creates a Guardian instance.
@@ -33,6 +39,8 @@ func New(cfg *config.Config, client *docker.Client, dispatcher *notify.Dispatche
 func (g *Guardian) Run(ctx context.Context) error {
 	for {
 		g.cycle++
+		g.orchestratorCached = false
+		g.backupRunning = nil
 
 		g.checkUnhealthy(ctx)
 		g.checkDependencyOrphans(ctx)
