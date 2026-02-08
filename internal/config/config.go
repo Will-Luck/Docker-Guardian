@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -31,11 +33,19 @@ type Config struct {
 	WatchtowerScope      string // "all" or "affected"
 	WatchtowerEvents     string // "orchestration" or "all"
 
+	// Circuit breaker / backoff
+	BackoffMultiplier float64
+	BackoffMax        int // seconds
+	BackoffResetAfter int // seconds
+	RestartBudget     int
+	RestartWindow     int // seconds
+
 	// Post-restart script
 	PostRestartScript string
 
 	// Notification events
-	NotifyEvents string
+	NotifyEvents    string
+	NotifyRateLimit int // seconds (0 = unlimited)
 
 	// Notification services
 	WebhookURL     string
@@ -63,6 +73,9 @@ type Config struct {
 	EmailUser string
 	EmailPass string
 
+	// Metrics
+	MetricsPort int
+
 	// Logging
 	LogJSON bool
 }
@@ -89,8 +102,15 @@ func Load() *Config {
 		WatchtowerScope:      envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
 		WatchtowerEvents:     envStr("AUTOHEAL_WATCHTOWER_EVENTS", "orchestration"),
 
+		BackoffMultiplier: envFloat("AUTOHEAL_BACKOFF_MULTIPLIER", 2),
+		BackoffMax:        envInt("AUTOHEAL_BACKOFF_MAX", 300),
+		BackoffResetAfter: envInt("AUTOHEAL_BACKOFF_RESET_AFTER", 600),
+		RestartBudget:     envInt("AUTOHEAL_RESTART_BUDGET", 5),
+		RestartWindow:     envInt("AUTOHEAL_RESTART_WINDOW", 300),
+
 		PostRestartScript: envStr("POST_RESTART_SCRIPT", ""),
 		NotifyEvents:      envStr("NOTIFY_EVENTS", "actions"),
+		NotifyRateLimit:   envInt("NOTIFY_RATE_LIMIT", 60),
 
 		WebhookURL:     envStr("WEBHOOK_URL", ""),
 		WebhookJSONKey: envStr("WEBHOOK_JSON_KEY", "text"),
@@ -117,6 +137,8 @@ func Load() *Config {
 		EmailUser: envStr("NOTIFY_EMAIL_USER", ""),
 		EmailPass: envStr("NOTIFY_EMAIL_PASS", ""),
 
+		MetricsPort: envInt("METRICS_PORT", 0),
+
 		LogJSON: envBool("LOG_JSON", false),
 	}
 }
@@ -137,6 +159,11 @@ func (c *Config) PrintBanner() {
 	fmt.Println("AUTOHEAL_WATCHTOWER_COOLDOWN=" + strconv.Itoa(c.WatchtowerCooldown))
 	fmt.Println("AUTOHEAL_WATCHTOWER_SCOPE=" + c.WatchtowerScope)
 	fmt.Println("AUTOHEAL_WATCHTOWER_EVENTS=" + c.WatchtowerEvents)
+	fmt.Printf("AUTOHEAL_BACKOFF_MULTIPLIER=%g\n", c.BackoffMultiplier)
+	fmt.Println("AUTOHEAL_BACKOFF_MAX=" + strconv.Itoa(c.BackoffMax))
+	fmt.Println("AUTOHEAL_BACKOFF_RESET_AFTER=" + strconv.Itoa(c.BackoffResetAfter))
+	fmt.Println("AUTOHEAL_RESTART_BUDGET=" + strconv.Itoa(c.RestartBudget))
+	fmt.Println("AUTOHEAL_RESTART_WINDOW=" + strconv.Itoa(c.RestartWindow))
 }
 
 // ResolvedNotifyEvents returns the normalised event categories.
@@ -170,6 +197,43 @@ func (c *Config) ResolvedNotifyEvents() []string {
 	return result
 }
 
+// Validate checks configuration for invalid or dangerous values.
+func (c *Config) Validate() error {
+	var errs []error
+	if c.Interval <= 0 {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_INTERVAL must be > 0, got %d", c.Interval))
+	}
+	if c.GracePeriod < 0 {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_GRACE_PERIOD must be >= 0, got %d", c.GracePeriod))
+	}
+	if c.DefaultStopTimeout < 0 {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_DEFAULT_STOP_TIMEOUT must be >= 0, got %d", c.DefaultStopTimeout))
+	}
+	if c.WatchtowerScope != "all" && c.WatchtowerScope != "affected" {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_WATCHTOWER_SCOPE must be \"all\" or \"affected\", got %q", c.WatchtowerScope))
+	}
+	if c.WatchtowerEvents != "orchestration" && c.WatchtowerEvents != "all" {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_WATCHTOWER_EVENTS must be \"orchestration\" or \"all\", got %q", c.WatchtowerEvents))
+	}
+	for _, u := range []struct {
+		name, val string
+	}{
+		{"WEBHOOK_URL", c.WebhookURL},
+		{"APPRISE_URL", c.AppriseURL},
+		{"NOTIFY_GOTIFY_URL", c.GotifyURL},
+		{"NOTIFY_DISCORD_WEBHOOK", c.DiscordWebhook},
+		{"NOTIFY_SLACK_WEBHOOK", c.SlackWebhook},
+		{"NOTIFY_LUNASEA_WEBHOOK", c.LunaSeaWebhook},
+	} {
+		if u.val != "" {
+			if _, err := url.Parse(u.val); err != nil {
+				errs = append(errs, fmt.Errorf("%s is not a valid URL: %w", u.name, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func envStr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -187,6 +251,18 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func envFloat(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }
 
 func envBool(key string, def bool) bool {

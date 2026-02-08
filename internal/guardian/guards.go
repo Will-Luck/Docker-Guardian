@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/Will-Luck/Docker-Guardian/internal/metrics"
 )
 
 // shouldSkip returns true if this container should be skipped due to
@@ -20,18 +22,20 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 
 		if g.cfg.WatchtowerScope == "affected" {
 			if g.isContainerInOrchestration(cleanName) {
-				now := time.Now().Format("02-01-2006 15:04:05")
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
 				fmt.Printf("%s Container %s (%s) affected by orchestration activity within %ds - skipping\n",
 					now, cleanName, shortID, g.cfg.WatchtowerCooldown)
-				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
+				g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
+				metrics.SkipsTotal.WithLabelValues(cleanName, "orchestration").Inc()
 				return true
 			}
 		} else {
 			if g.isOrchestratorActive() {
-				now := time.Now().Format("02-01-2006 15:04:05")
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
 				fmt.Printf("%s Container %s (%s) skipped - orchestration activity detected within %ds\n",
 					now, cleanName, shortID, g.cfg.WatchtowerCooldown)
-				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
+				g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
+				metrics.SkipsTotal.WithLabelValues(cleanName, "orchestration").Inc()
 				return true
 			}
 		}
@@ -41,12 +45,13 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 	if g.cfg.GracePeriod > 0 {
 		finishedAt, err := g.docker.ContainerFinishedAt(ctx, containerID)
 		if err == nil {
-			age := time.Since(finishedAt)
+			age := g.clock.Since(finishedAt)
 			if age < time.Duration(g.cfg.GracePeriod)*time.Second {
-				now := time.Now().Format("02-01-2006 15:04:05")
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
 				fmt.Printf("%s Container %s (%s) stopped within grace period (%ds) - skipping\n",
 					now, cleanName, shortID, g.cfg.GracePeriod)
-				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - grace period", cleanName, shortID))
+				g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - grace period", cleanName, shortID))
+				metrics.SkipsTotal.WithLabelValues(cleanName, "grace").Inc()
 				return true
 			}
 		}
@@ -54,10 +59,11 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 
 	// Backup awareness
 	if g.isBackupManaged(labels) && g.cachedBackupRunning(ctx) {
-		now := time.Now().Format("02-01-2006 15:04:05")
+		now := g.clock.Now().Format("02-01-2006 15:04:05")
 		fmt.Printf("%s Container %s (%s) managed by backup (currently running) - skipping\n",
 			now, cleanName, shortID)
-		g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - backup running", cleanName, shortID))
+		g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - backup running", cleanName, shortID))
+		metrics.SkipsTotal.WithLabelValues(cleanName, "backup").Inc()
 		return true
 	}
 
@@ -73,7 +79,7 @@ func (g *Guardian) fetchOrchestrationEvents(ctx context.Context) {
 	g.orchestratorCached = true
 	g.orchestratorEvents = nil
 
-	now := time.Now()
+	now := g.clock.Now()
 	since := now.Add(-time.Duration(g.cfg.WatchtowerCooldown) * time.Second)
 	orchestrationOnly := g.cfg.WatchtowerEvents != "all"
 
@@ -84,7 +90,7 @@ func (g *Guardian) fetchOrchestrationEvents(ctx context.Context) {
 	g.orchestratorEvents = events
 
 	if len(events) > 0 {
-		dateStr := time.Now().Format("02-01-2006 15:04:05")
+		dateStr := g.clock.Now().Format("02-01-2006 15:04:05")
 		fmt.Printf("%s Orchestration activity detected: %d container event(s) within %ds cooldown\n",
 			dateStr, len(events), g.cfg.WatchtowerCooldown)
 	}
