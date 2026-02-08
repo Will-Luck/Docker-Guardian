@@ -31,6 +31,7 @@ run_test() {
   echo ""
 }
 
+run_test "Healthcheck Restart" "test-healthcheck.sh"
 run_test "Dependency Recovery" "test-dependency.sh"
 run_test "Backup Awareness" "test-backup.sh"
 run_test "Grace Period" "test-grace.sh"
