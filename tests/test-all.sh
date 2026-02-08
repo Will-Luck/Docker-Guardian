@@ -35,6 +35,7 @@ run_test "Dependency Recovery" "test-dependency.sh"
 run_test "Backup Awareness" "test-backup.sh"
 run_test "Grace Period" "test-grace.sh"
 run_test "Watchtower Awareness" "test-watchtower.sh"
+run_test "Notifications" "test-notifications.sh"
 
 echo "============================================="
 echo "  Final Results: ${TOTAL_PASS} suites passed, ${TOTAL_FAIL} suites failed"
