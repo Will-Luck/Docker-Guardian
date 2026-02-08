@@ -1,0 +1,202 @@
+package config
+
+import (
+	"os"
+	"strconv"
+	"strings"
+)
+
+// Config holds all Docker-Guardian configuration from environment variables.
+// Every field maps 1:1 to the shell version's env vars for backward compatibility.
+type Config struct {
+	// Docker connection
+	DockerSock  string
+	CurlTimeout int // seconds (kept for env var compat, used as HTTP timeout)
+
+	// Core autoheal
+	ContainerLabel     string // "all" or label name
+	StartPeriod        int    // seconds
+	Interval           int    // seconds
+	DefaultStopTimeout int    // seconds
+	OnlyMonitorRunning bool
+
+	// Docker-Guardian extensions
+	MonitorDependencies  bool
+	DependencyStartDelay int // seconds
+	BackupLabel          string
+	BackupContainer      string
+	GracePeriod          int    // seconds
+	WatchtowerCooldown   int    // seconds
+	WatchtowerScope      string // "all" or "affected"
+	WatchtowerEvents     string // "orchestration" or "all"
+
+	// Post-restart script
+	PostRestartScript string
+
+	// Notification events
+	NotifyEvents string
+
+	// Notification services
+	WebhookURL     string
+	WebhookJSONKey string
+	AppriseURL     string
+
+	GotifyURL   string
+	GotifyToken string
+
+	DiscordWebhook string
+	SlackWebhook   string
+
+	TelegramToken  string
+	TelegramChatID string
+
+	PushoverToken string
+	PushoverUser  string
+
+	PushbulletToken string
+	LunaSeaWebhook  string
+
+	EmailSMTP string
+	EmailFrom string
+	EmailTo   string
+	EmailUser string
+	EmailPass string
+
+	// Logging
+	LogJSON bool
+}
+
+// Load reads all configuration from environment variables with defaults
+// matching the shell version exactly.
+func Load() *Config {
+	return &Config{
+		DockerSock:  envStr("DOCKER_SOCK", "/var/run/docker.sock"),
+		CurlTimeout: envInt("CURL_TIMEOUT", 30),
+
+		ContainerLabel:     envStr("AUTOHEAL_CONTAINER_LABEL", "autoheal"),
+		StartPeriod:        envInt("AUTOHEAL_START_PERIOD", 0),
+		Interval:           envInt("AUTOHEAL_INTERVAL", 5),
+		DefaultStopTimeout: envInt("AUTOHEAL_DEFAULT_STOP_TIMEOUT", 10),
+		OnlyMonitorRunning: envBool("AUTOHEAL_ONLY_MONITOR_RUNNING", false),
+
+		MonitorDependencies:  envBool("AUTOHEAL_MONITOR_DEPENDENCIES", true),
+		DependencyStartDelay: envInt("AUTOHEAL_DEPENDENCY_START_DELAY", 5),
+		BackupLabel:          envStr("AUTOHEAL_BACKUP_LABEL", "docker-volume-backup.stop-during-backup"),
+		BackupContainer:      envStr("AUTOHEAL_BACKUP_CONTAINER", ""),
+		GracePeriod:          envInt("AUTOHEAL_GRACE_PERIOD", 300),
+		WatchtowerCooldown:   envInt("AUTOHEAL_WATCHTOWER_COOLDOWN", 300),
+		WatchtowerScope:      envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
+		WatchtowerEvents:     envStr("AUTOHEAL_WATCHTOWER_EVENTS", "orchestration"),
+
+		PostRestartScript: envStr("POST_RESTART_SCRIPT", ""),
+		NotifyEvents:      envStr("NOTIFY_EVENTS", "actions"),
+
+		WebhookURL:     envStr("WEBHOOK_URL", ""),
+		WebhookJSONKey: envStr("WEBHOOK_JSON_KEY", "text"),
+		AppriseURL:     envStr("APPRISE_URL", ""),
+
+		GotifyURL:   envStr("NOTIFY_GOTIFY_URL", ""),
+		GotifyToken: envStr("NOTIFY_GOTIFY_TOKEN", ""),
+
+		DiscordWebhook: envStr("NOTIFY_DISCORD_WEBHOOK", ""),
+		SlackWebhook:   envStr("NOTIFY_SLACK_WEBHOOK", ""),
+
+		TelegramToken:  envStr("NOTIFY_TELEGRAM_TOKEN", ""),
+		TelegramChatID: envStr("NOTIFY_TELEGRAM_CHAT_ID", ""),
+
+		PushoverToken: envStr("NOTIFY_PUSHOVER_TOKEN", ""),
+		PushoverUser:  envStr("NOTIFY_PUSHOVER_USER", ""),
+
+		PushbulletToken: envStr("NOTIFY_PUSHBULLET_TOKEN", ""),
+		LunaSeaWebhook:  envStr("NOTIFY_LUNASEA_WEBHOOK", ""),
+
+		EmailSMTP: envStr("NOTIFY_EMAIL_SMTP", ""),
+		EmailFrom: envStr("NOTIFY_EMAIL_FROM", ""),
+		EmailTo:   envStr("NOTIFY_EMAIL_TO", ""),
+		EmailUser: envStr("NOTIFY_EMAIL_USER", ""),
+		EmailPass: envStr("NOTIFY_EMAIL_PASS", ""),
+
+		LogJSON: envBool("LOG_JSON", false),
+	}
+}
+
+// Print logs all non-secret configuration values.
+func (c *Config) Print(log interface{ Info(string, ...any) }) {
+	log.Info("config",
+		"AUTOHEAL_CONTAINER_LABEL", c.ContainerLabel,
+		"AUTOHEAL_START_PERIOD", c.StartPeriod,
+		"AUTOHEAL_INTERVAL", c.Interval,
+		"AUTOHEAL_DEFAULT_STOP_TIMEOUT", c.DefaultStopTimeout,
+		"AUTOHEAL_ONLY_MONITOR_RUNNING", c.OnlyMonitorRunning,
+		"AUTOHEAL_MONITOR_DEPENDENCIES", c.MonitorDependencies,
+		"AUTOHEAL_DEPENDENCY_START_DELAY", c.DependencyStartDelay,
+		"AUTOHEAL_BACKUP_LABEL", c.BackupLabel,
+		"AUTOHEAL_BACKUP_CONTAINER", c.BackupContainer,
+		"AUTOHEAL_GRACE_PERIOD", c.GracePeriod,
+		"AUTOHEAL_WATCHTOWER_COOLDOWN", c.WatchtowerCooldown,
+		"AUTOHEAL_WATCHTOWER_SCOPE", c.WatchtowerScope,
+		"AUTOHEAL_WATCHTOWER_EVENTS", c.WatchtowerEvents,
+	)
+}
+
+// ResolvedNotifyEvents returns the normalised event categories.
+func (c *Config) ResolvedNotifyEvents() []string {
+	raw := strings.TrimSpace(c.NotifyEvents)
+	switch raw {
+	case "all":
+		return []string{"startup", "actions", "skips"}
+	case "debug":
+		return []string{"startup", "actions", "skips", "debug"}
+	}
+
+	var result []string
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		switch item {
+		case "1", "startup":
+			result = append(result, "startup")
+		case "2", "actions":
+			result = append(result, "actions")
+		case "3", "failures":
+			result = append(result, "failures")
+		case "4", "skips":
+			result = append(result, "skips")
+		case "5", "debug":
+			result = append(result, "startup", "actions", "skips", "debug")
+		case "all":
+			result = append(result, "startup", "actions", "skips")
+		}
+	}
+	return result
+}
+
+func envStr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
+}

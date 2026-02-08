@@ -1,0 +1,92 @@
+package docker
+
+import (
+	"context"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+)
+
+// UnhealthyContainers returns containers with health status "unhealthy",
+// optionally filtered by label and running status.
+func (c *Client) UnhealthyContainers(ctx context.Context, label string, onlyRunning bool) ([]container.Summary, error) {
+	opts := client.ContainerListOptions{}
+	opts.Filters = opts.Filters.Add("health", "unhealthy")
+	if label != "all" {
+		opts.Filters = opts.Filters.Add("label", label+"=true")
+	}
+	if onlyRunning {
+		opts.Filters = opts.Filters.Add("status", "running")
+	}
+	result, err := c.api.ContainerList(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// ExitedContainers returns all containers with status "exited".
+func (c *Client) ExitedContainers(ctx context.Context) ([]container.Summary, error) {
+	opts := client.ContainerListOptions{All: true}
+	opts.Filters = opts.Filters.Add("status", "exited")
+	result, err := c.api.ContainerList(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// RunningContainers returns all containers with status "running".
+func (c *Client) RunningContainers(ctx context.Context) ([]container.Summary, error) {
+	opts := client.ContainerListOptions{}
+	opts.Filters = opts.Filters.Add("status", "running")
+	result, err := c.api.ContainerList(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// InspectContainer returns full container details by ID.
+func (c *Client) InspectContainer(ctx context.Context, id string) (container.InspectResponse, error) {
+	result, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return container.InspectResponse{}, err
+	}
+	return result.Container, nil
+}
+
+// RestartContainer restarts a container with the given timeout.
+func (c *Client) RestartContainer(ctx context.Context, id string, timeout int) error {
+	_, err := c.api.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &timeout})
+	return err
+}
+
+// StartContainer starts a stopped container.
+func (c *Client) StartContainer(ctx context.Context, id string) error {
+	_, err := c.api.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
+}
+
+// ContainerStatus returns the current status string of a container.
+func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error) {
+	info, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", err
+	}
+	return string(info.Container.State.Status), nil
+}
+
+// ContainerFinishedAt returns when the container last stopped.
+func (c *Client) ContainerFinishedAt(ctx context.Context, id string) (time.Time, error) {
+	info, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return time.Time{}, err
+	}
+	t, err := time.Parse(time.RFC3339Nano, info.Container.State.FinishedAt)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
+}
