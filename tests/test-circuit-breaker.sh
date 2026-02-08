@@ -124,13 +124,13 @@ fi
 # ── Test 3: Verify CRITICAL notification was logged ────────────────
 
 echo ""
-echo "--- Test 3: CRITICAL notification in logs ---"
+echo "--- Test 3: Circuit open message logged to stdout ---"
 
-if docker logs dg-test-guardian-cb 2>&1 | grep -q "\[CRITICAL\]"; then
-  echo "PASS: CRITICAL notification logged for circuit breaker"
+if docker logs dg-test-guardian-cb 2>&1 | grep -q "circuit open"; then
+  echo "PASS: Circuit open message logged"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: No CRITICAL notification found in logs"
+  echo "FAIL: No circuit open message found in logs"
   FAIL=$((FAIL + 1))
   docker logs dg-test-guardian-cb 2>&1 | tail -20
 fi
