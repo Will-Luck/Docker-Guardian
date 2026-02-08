@@ -85,6 +85,14 @@ func (g *Guardian) runEventDriven(ctx context.Context, client *docker.Client) er
 	watcher := docker.NewWatcher(client)
 	eventCh := watcher.Watch(ctx)
 
+	// Periodic full scan as safety net (catches grace period expiry, missed events, etc.)
+	scanInterval := time.Duration(g.cfg.Interval) * time.Second
+	if scanInterval <= 0 {
+		scanInterval = 5 * time.Second
+	}
+	ticker := time.NewTicker(scanInterval)
+	defer ticker.Stop()
+
 	// Initial full scan on startup
 	g.fullScan(ctx)
 
@@ -95,6 +103,8 @@ func (g *Guardian) runEventDriven(ctx context.Context, client *docker.Client) er
 				return nil // watcher closed (context cancelled)
 			}
 			g.handleEvent(ctx, evt)
+		case <-ticker.C:
+			g.fullScan(ctx)
 		case <-ctx.Done():
 			return nil
 		}
