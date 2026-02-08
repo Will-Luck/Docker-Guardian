@@ -1,122 +1,181 @@
-# Docker Autoheal
+# Docker-Guardian
 
-Monitor and restart unhealthy docker containers. 
-This functionality was proposed to be included with the addition of `HEALTHCHECK`, however didn't make the cut.
-This container is a stand-in till there is native support for `--exit-on-unhealthy` https://github.com/docker/docker/pull/22719.
+Dependency-aware container recovery for Docker. Forked from [willfarrell/docker-autoheal](https://github.com/willfarrell/docker-autoheal) (MIT).
 
-## Supported tags and Dockerfile links
-- [`latest` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/main/Dockerfile) - Built daily
-- [`1.1.0` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/1.1.0/Dockerfile)
-- [`v0.7.0` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/v0.7.0/Dockerfile)
+Adds four features to the battle-tested autoheal base:
 
+1. **Dependency Monitoring** — auto-detects and recovers containers orphaned when their network parent restarts
+2. **Watchtower Awareness** — detects active orchestration (Watchtower updates, etc.) via Docker events and pauses monitoring during the cooldown window
+3. **Backup Awareness** — skips containers managed by backup tools during active backups
+4. **Grace Period** — avoids interfering with manual maintenance windows
 
-![](https://img.shields.io/docker/pulls/willfarrell/autoheal "Total docker pulls") [![](https://images.microbadger.com/badges/image/willfarrell/autoheal.svg)](http://microbadger.com/images/willfarrell/autoheal "Docker layer breakdown")
+All original autoheal functionality (unhealthy container restarts, webhooks, Apprise notifications) is preserved.
 
-## How to use
+## Quick Start
 
-### 1. Docker CLI
-#### UNIX socket passthrough
 ```bash
 docker run -d \
-    --name autoheal \
-    --restart=always \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    willfarrell/autoheal
+  --name docker-guardian \
+  --restart=always \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/lucknet/docker-guardian
 ```
-#### TCP socket 
+
+## The Problem
+
+Containers sharing a network namespace (`--network=container:X`) all die with exit code 128 when the parent container stops. Docker's restart policy brings back the parent, but **dependents remain dead** — even with `restart=unless-stopped`.
+
+This is common with VPN or gateway containers where multiple services route through one tunnel:
+
+```
+vpn-gateway (parent)
+  ├── app-1  (--network=container:vpn-gateway)
+  ├── app-2  (--network=container:vpn-gateway)
+  └── app-3  (--network=container:vpn-gateway)
+```
+
+When the gateway container restarts (Watchtower update, crash, etc.), all dependents exit 128 and stay down. Docker-Guardian detects this and restarts them automatically.
+
+## Features
+
+### Dependency Monitoring
+
+Auto-detects network dependencies via Docker API — **no labels needed**. Every poll cycle:
+
+1. Queries exited containers
+2. Filters to those using `--network=container:X` network mode
+3. Checks if exit code is 128 (killed by parent exit)
+4. Verifies parent is running
+5. Waits configurable delay (parent initialisation time)
+6. Starts the orphaned dependent
+
+Multi-level dependencies (A→B→C) resolve naturally over multiple poll cycles.
+
+### Watchtower Awareness
+
+Detects active orchestration (Watchtower, manual `docker-compose up`, etc.) by querying the Docker events API each poll cycle:
+
+- Watches for container `destroy` and `create` events within a configurable cooldown window (default 300s)
+- When events are found, pauses all monitoring until the cooldown expires
+- Tracks the **actual** activity window — a 10-minute image pull produces events at start and end, so the cooldown tracks the real duration
+- Cached per poll cycle (single API call)
+- Configurable scope: skip all containers (default) or only affected ones
+- Configurable events: orchestration only (default, avoids self-triggering) or all lifecycle events
+
+Set `AUTOHEAL_WATCHTOWER_COOLDOWN=0` to disable.
+
+### Backup Awareness
+
+Prevents Docker-Guardian from interfering with backup tools like [docker-volume-backup](https://github.com/offen/docker-volume-backup):
+
+- Auto-detects running backup containers by image name
+- Skips containers labelled with `docker-volume-backup.stop-during-backup` while backup is active
+- Cached per poll cycle (single API call)
+
+### Grace Period
+
+Skips recently-stopped containers to avoid fighting with:
+
+- **Manual stops** for maintenance
+- **Other orchestration tools** not covered by Watchtower awareness
+
+Default: 300 seconds. Set to `0` to disable.
+
+## Configuration
+
+All configuration via environment variables, matching the upstream autoheal pattern:
+
+### Docker-Guardian Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTOHEAL_MONITOR_DEPENDENCIES` | `true` | Enable dependency orphan recovery |
+| `AUTOHEAL_DEPENDENCY_START_DELAY` | `5` | Seconds to wait before starting orphaned dependent |
+| `AUTOHEAL_BACKUP_LABEL` | `docker-volume-backup.stop-during-backup` | Label marking backup-managed containers |
+| `AUTOHEAL_BACKUP_CONTAINER` | _(empty)_ | Backup container name (empty = auto-detect by image) |
+| `AUTOHEAL_GRACE_PERIOD` | `300` | Skip containers stopped within this many seconds |
+| `AUTOHEAL_WATCHTOWER_COOLDOWN` | `300` | Skip containers if orchestration activity detected within this many seconds. `0` to disable |
+| `AUTOHEAL_WATCHTOWER_SCOPE` | `all` | `all` = skip every container when orchestration detected. `affected` = only skip containers with events in the window |
+| `AUTOHEAL_WATCHTOWER_EVENTS` | `orchestration` | `orchestration` = only `destroy`+`create` events (Watchtower signature). `all` = all container lifecycle events |
+
+### Original Autoheal Settings (unchanged)
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTOHEAL_CONTAINER_LABEL` | `autoheal` | Label to filter monitored containers (`all` for all) |
+| `AUTOHEAL_INTERVAL` | `5` | Poll interval in seconds |
+| `AUTOHEAL_START_PERIOD` | `0` | Delay before first check |
+| `AUTOHEAL_DEFAULT_STOP_TIMEOUT` | `10` | Default stop timeout for unhealthy restarts |
+| `AUTOHEAL_ONLY_MONITOR_RUNNING` | `false` | Only monitor running containers for health |
+| `DOCKER_SOCK` | `/var/run/docker.sock` | Docker socket path or `tcp://host:port` |
+| `CURL_TIMEOUT` | `30` | API request timeout |
+| `WEBHOOK_URL` | _(empty)_ | Webhook URL for notifications |
+| `WEBHOOK_JSON_KEY` | `content` | JSON key for webhook payload |
+| `APPRISE_URL` | _(empty)_ | Apprise notification URL |
+| `POST_RESTART_SCRIPT` | _(empty)_ | Script to run after container restart/start |
+
+## Decision Flowchart
+
+```
+Container exited?
+├── Has healthcheck + unhealthy?
+│   ├── Orchestration active (Watchtower)? → SKIP
+│   ├── Within grace period? → SKIP
+│   ├── Backup-managed + backup running? → SKIP
+│   ├── State = restarting? → SKIP
+│   └── Restart container ✓
+│
+└── NetworkMode = container:X?
+    ├── Parent not running? → SKIP
+    ├── Orchestration active (Watchtower)? → SKIP
+    ├── Within grace period? → SKIP
+    ├── Backup-managed + backup running? → SKIP
+    ├── Wait start delay...
+    ├── Parent still running? → Start container ✓
+    └── Parent stopped? → SKIP
+```
+
+## Testing
+
+Build and run the test suite:
+
 ```bash
-docker run -d \
-    --name autoheal \
-    --restart=always \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -e DOCKER_SOCK=tcp://$HOST:$PORT \
-    -v /path/to/certs/:/certs/:ro \
-    willfarrell/autoheal
+docker build -t docker-guardian .
+cd tests && ./test-all.sh
 ```
-#### TCP with mTLS (HTTPS)
+
+Individual tests:
+
 ```bash
-docker run -d \
-    --name autoheal \
-    --restart=always \
-    --tlscacert=/certs/ca.pem \
-    --tlscert=/certs/client-cert.pem \
-    --tlskey=/certs/client-key.pem \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -e DOCKER_HOST=tcp://$HOST:2376 \
-    -e DOCKER_SOCK=tcps://$HOST:2376 \
-    -e DOCKER_TLS_VERIFY=1 \
-    -v /path/to/certs/:/certs/:ro \
-    willfarrell/autoheal
+./tests/test-dependency.sh   # Dependency orphan recovery
+./tests/test-backup.sh       # Backup awareness
+./tests/test-grace.sh        # Grace period behaviour
+./tests/test-watchtower.sh   # Watchtower/orchestration awareness
 ```
-The certificates and keys need these names and resides under /certs inside the container:
-* ca.pem
-* client-cert.pem
-* client-key.pem
 
-> See https://docs.docker.com/engine/security/https/ for how to configure TCP with mTLS
+## Building
 
-### Change Timezone
-If you need the timezone to match the local machine, you can map the `/etc/localtime` into the container.
 ```bash
-docker run ... -v /etc/localtime:/etc/localtime:ro
+# Single architecture
+docker build -t docker-guardian .
+
+# Multi-arch
+docker buildx build --platform linux/amd64,linux/arm64 -t docker-guardian .
 ```
 
-### 2. Use in your container image
-Choose one of the three alternatives:
+## Differences from upstream
 
-a) Apply the label `autoheal=true` to your container to have it watched;<br/>
-b) Set ENV `AUTOHEAL_CONTAINER_LABEL=all` to watch all running containers;<br/>
-c) Set ENV `AUTOHEAL_CONTAINER_LABEL` to existing container label that has the value `true`;<br/>
+| Feature | docker-autoheal | Docker-Guardian |
+|---|---|---|
+| Unhealthy container restarts | Yes | Yes |
+| Dependency orphan recovery | No | Yes |
+| Watchtower/orchestration awareness | No | Yes |
+| Backup awareness | No | Yes |
+| Grace period | No | Yes |
+| Alpine version | 3.18 | 3.20 |
+| Webhook notifications | Yes | Yes (extended to new features) |
 
-> Note: You must apply `HEALTHCHECK` to your docker images first.<br/>
-> See https://docs.docker.com/engine/reference/builder/#healthcheck for details.
+## Licence
 
-#### Docker Compose (example)
-```yaml
-services:
-  app:
-    extends:
-      file: ${PWD}/services.yml
-      service: app
-    labels:
-      autoheal-app: true
-
-  autoheal:
-    deploy:
-      replicas: 1
-    environment:
-      AUTOHEAL_CONTAINER_LABEL: autoheal-app
-    image: willfarrell/autoheal:latest
-    network_mode: none
-    restart: always
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-```
-
-#### Optional Container Labels
-|`autoheal.stop.timeout=20`            |Per containers override for stop timeout seconds during restart|
-| --- | --- |
-
-## Environment Defaults
-|Variable                              |Description|
-| --- | --- |
-|`AUTOHEAL_CONTAINER_LABEL=autoheal`   |set to existing label name that has the value `true`|
-|`AUTOHEAL_INTERVAL=5`                 |check every 5 seconds|
-|`AUTOHEAL_START_PERIOD=0`             |wait 0 seconds before first health check|
-|`AUTOHEAL_DEFAULT_STOP_TIMEOUT=10`    |Docker waits max 10 seconds (the Docker default) for a container to stop before killing during restarts (container overridable via label, see below)|
-|`AUTOHEAL_ONLY_MONITOR_RUNNING=false` |All containers monitored by default. Set this to true to only monitor running containers. This will result in Paused contaners being ignored.|
-|`DOCKER_SOCK=/var/run/docker.sock`    |Unix socket for curl requests to Docker API|
-|`CURL_TIMEOUT=30`                     |--max-time seconds for curl requests to Docker API|
-|`WEBHOOK_URL=""`                      |post message to the webhook if a container was restarted (or restart failed)|
-
-## Testing (building locally)
-```bash
-docker buildx build -t autoheal .
-
-docker run -d \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    autoheal
-```
+MIT — see [LICENSE](LICENSE). Original work by [Will Farrell](https://github.com/willfarrell).

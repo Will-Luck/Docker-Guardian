@@ -1,5 +1,9 @@
 #!/usr/bin/env sh
 
+# Docker-Guardian: dependency-aware container recovery
+# Forked from willfarrell/docker-autoheal (MIT)
+# Adds: dependency monitoring, backup awareness, grace period, Watchtower awareness
+
 set -e
 # shellcheck disable=2039
 set -o pipefail
@@ -25,17 +29,40 @@ case "${DOCKER_SOCK}" in
              ;;
 esac
 
+# Original autoheal config
 AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL:-autoheal}
 AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD:-0}
 AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL:-5}
 AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT:-10}
 AUTOHEAL_ONLY_MONITOR_RUNNING=${AUTOHEAL_ONLY_MONITOR_RUNNING:-false}
 
+# Docker-Guardian config
+AUTOHEAL_MONITOR_DEPENDENCIES=${AUTOHEAL_MONITOR_DEPENDENCIES:-true}
+AUTOHEAL_DEPENDENCY_START_DELAY=${AUTOHEAL_DEPENDENCY_START_DELAY:-5}
+AUTOHEAL_BACKUP_LABEL=${AUTOHEAL_BACKUP_LABEL:-"docker-volume-backup.stop-during-backup"}
+AUTOHEAL_BACKUP_CONTAINER=${AUTOHEAL_BACKUP_CONTAINER:-""}
+AUTOHEAL_GRACE_PERIOD=${AUTOHEAL_GRACE_PERIOD:-300}
+AUTOHEAL_WATCHTOWER_COOLDOWN=${AUTOHEAL_WATCHTOWER_COOLDOWN:-300}
+AUTOHEAL_WATCHTOWER_SCOPE=${AUTOHEAL_WATCHTOWER_SCOPE:-all}
+AUTOHEAL_WATCHTOWER_EVENTS=${AUTOHEAL_WATCHTOWER_EVENTS:-orchestration}
+
+echo "Docker-Guardian (forked from docker-autoheal)"
+echo "============================================="
 echo AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL}
 echo AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD}
 echo AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL}
 echo AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT}
 echo AUTOHEAL_ONLY_MONITOR_RUNNING=${AUTOHEAL_ONLY_MONITOR_RUNNING}
+echo AUTOHEAL_MONITOR_DEPENDENCIES=${AUTOHEAL_MONITOR_DEPENDENCIES}
+echo AUTOHEAL_DEPENDENCY_START_DELAY=${AUTOHEAL_DEPENDENCY_START_DELAY}
+echo AUTOHEAL_BACKUP_LABEL=${AUTOHEAL_BACKUP_LABEL}
+echo AUTOHEAL_BACKUP_CONTAINER=${AUTOHEAL_BACKUP_CONTAINER}
+echo AUTOHEAL_GRACE_PERIOD=${AUTOHEAL_GRACE_PERIOD}
+echo AUTOHEAL_WATCHTOWER_COOLDOWN=${AUTOHEAL_WATCHTOWER_COOLDOWN}
+echo AUTOHEAL_WATCHTOWER_SCOPE=${AUTOHEAL_WATCHTOWER_SCOPE}
+echo AUTOHEAL_WATCHTOWER_EVENTS=${AUTOHEAL_WATCHTOWER_EVENTS}
+
+# ── Docker API helpers ───────────────────────────────────────────────
 
 docker_curl() {
   curl --max-time "${CURL_TIMEOUT}" --no-buffer -s \
@@ -44,21 +71,245 @@ docker_curl() {
   "$@"
 }
 
+# ── Notification helpers (unchanged from upstream) ───────────────────
+
+notify_webhook() {
+  local text="$@"
+
+  if [ -n "$WEBHOOK_URL" ]; then
+    curl -s -X POST -H "Content-type: application/json" \
+      -d "$(generate_webhook_payload "$text")" "$WEBHOOK_URL" &
+  fi
+
+  if [ -n "$APPRISE_URL" ]; then
+    curl -s -X POST -H "Content-type: application/json" \
+      -d "$(generate_apprise_payload "$text")" "$APPRISE_URL" &
+  fi
+}
+
+notify_post_restart_script() {
+  if [ -n "$POST_RESTART_SCRIPT" ]; then
+    $POST_RESTART_SCRIPT "$@" &
+  fi
+}
+
+generate_webhook_payload() {
+  local text="$@"
+  cat <<EOF
+{"$WEBHOOK_JSON_KEY":"$text"}
+EOF
+}
+
+generate_apprise_payload() {
+  local text="$@"
+  cat <<EOF
+{"title":"Docker-Guardian","body":"$text"}
+EOF
+}
+
+# ── Guard functions (shared by unhealthy + dependency checks) ────────
+
+# Returns 0 (true) if container was stopped within AUTOHEAL_GRACE_PERIOD seconds
+# shellcheck disable=2039
+is_within_grace_period() {
+  local container_id="$1"
+
+  if [ "$AUTOHEAL_GRACE_PERIOD" -le 0 ] 2>/dev/null; then
+    return 1
+  fi
+
+  local finished_at
+  finished_at=$(docker_curl "${HTTP_ENDPOINT}/containers/${container_id}/json" | \
+    jq -r '.State.FinishedAt // empty')
+
+  if [ -z "$finished_at" ]; then
+    return 1
+  fi
+
+  # Strip nanoseconds and Z for BusyBox date compatibility
+  # Docker returns: 2026-01-15T10:30:00.123456789Z
+  # BusyBox needs:  2026-01-15 10:30:00
+  local clean_ts
+  clean_ts=$(echo "$finished_at" | sed 's/T/ /; s/\.[0-9]*Z$//')
+
+  local finished_epoch now_epoch age
+  finished_epoch=$(date -u -d "$clean_ts" +%s 2>/dev/null) || return 1
+  now_epoch=$(date -u +%s)
+  age=$((now_epoch - finished_epoch))
+
+  [ "$age" -lt "$AUTOHEAL_GRACE_PERIOD" ]
+}
+
+# Per-cycle cache for backup status
+_BACKUP_RUNNING_CACHE=""
+_BACKUP_CACHE_CYCLE=""
+
+# Returns 0 (true) if a backup container is currently running
+# shellcheck disable=2039
+is_backup_running() {
+  # Return cached result for this cycle
+  if [ "$_BACKUP_CACHE_CYCLE" = "$_CURRENT_CYCLE" ]; then
+    [ "$_BACKUP_RUNNING_CACHE" = "yes" ]
+    return $?
+  fi
+
+  _BACKUP_CACHE_CYCLE="$_CURRENT_CYCLE"
+  _BACKUP_RUNNING_CACHE="no"
+
+  local running_containers
+  running_containers=$(docker_curl "${HTTP_ENDPOINT}/containers/json?filters=%7B%22status%22%3A%5B%22running%22%5D%7D")
+
+  if [ -n "$AUTOHEAL_BACKUP_CONTAINER" ]; then
+    # Check by container name
+    if echo "$running_containers" | jq -e ".[] | select(.Names[] | contains(\"/${AUTOHEAL_BACKUP_CONTAINER}\"))" > /dev/null 2>&1; then
+      _BACKUP_RUNNING_CACHE="yes"
+    fi
+  else
+    # Auto-detect by image name (docker-volume-backup)
+    if echo "$running_containers" | jq -e '.[] | select(.Image | test("docker-volume-backup"))' > /dev/null 2>&1; then
+      _BACKUP_RUNNING_CACHE="yes"
+    fi
+  fi
+
+  [ "$_BACKUP_RUNNING_CACHE" = "yes" ]
+}
+
+# Returns 0 (true) if container has the backup-managed label
+# shellcheck disable=2039
+is_backup_managed() {
+  local labels_json="$1"
+
+  if [ -z "$AUTOHEAL_BACKUP_LABEL" ]; then
+    return 1
+  fi
+
+  echo "$labels_json" | jq -e ".[\"${AUTOHEAL_BACKUP_LABEL}\"]" > /dev/null 2>&1
+}
+
+# ── Orchestrator / Watchtower awareness ──────────────────────────────
+
+# Per-cycle cache for orchestration events
+_ORCHESTRATOR_ACTIVE_CACHE=""
+_ORCHESTRATOR_NAMES_CACHE=""
+_ORCHESTRATOR_CACHE_CYCLE=""
+
+# Fetches Docker events from the cooldown window and caches results for this cycle
+# shellcheck disable=2039
+_fetch_orchestrator_events() {
+  if [ "$_ORCHESTRATOR_CACHE_CYCLE" = "$_CURRENT_CYCLE" ]; then
+    return
+  fi
+  _ORCHESTRATOR_CACHE_CYCLE="$_CURRENT_CYCLE"
+  _ORCHESTRATOR_ACTIVE_CACHE="no"
+  _ORCHESTRATOR_NAMES_CACHE=""
+
+  if [ "$AUTOHEAL_WATCHTOWER_COOLDOWN" -le 0 ] 2>/dev/null; then
+    return
+  fi
+
+  local now since filters events
+  now=$(date -u +%s)
+  since=$((now - AUTOHEAL_WATCHTOWER_COOLDOWN))
+
+  if [ "$AUTOHEAL_WATCHTOWER_EVENTS" = "all" ]; then
+    # All container lifecycle events
+    filters="%7B%22type%22%3A%5B%22container%22%5D%7D"
+  else
+    # Default (orchestration): only destroy+create (Watchtower signature)
+    # Avoids self-triggering from Guardian's own start actions
+    filters="%7B%22type%22%3A%5B%22container%22%5D%2C%22action%22%3A%5B%22destroy%22%2C%22create%22%5D%7D"
+  fi
+
+  events=$(docker_curl "${HTTP_ENDPOINT}/events?since=${since}&until=${now}&filters=${filters}")
+
+  if [ -n "$events" ]; then
+    _ORCHESTRATOR_ACTIVE_CACHE="yes"
+    _ORCHESTRATOR_NAMES_CACHE=$(echo "$events" | jq -r '.Actor.Attributes.name // empty' 2>/dev/null)
+    local event_count
+    event_count=$(echo "$events" | wc -l)
+    local date_str
+    date_str=$(date +%d-%m-%Y" "%H:%M:%S)
+    echo "$date_str Orchestration activity detected: ${event_count} container event(s) within ${AUTOHEAL_WATCHTOWER_COOLDOWN}s cooldown"
+  fi
+}
+
+# Returns 0 (true) if any orchestration activity detected within cooldown window
+is_orchestrator_active() {
+  _fetch_orchestrator_events
+  [ "$_ORCHESTRATOR_ACTIVE_CACHE" = "yes" ]
+}
+
+# Returns 0 (true) if this specific container has orchestration events
+# shellcheck disable=2039
+is_container_in_orchestration() {
+  local container_name="$1"
+  _fetch_orchestrator_events
+
+  if [ "$_ORCHESTRATOR_ACTIVE_CACHE" != "yes" ]; then
+    return 1
+  fi
+
+  # Strip leading / from container name for matching
+  local clean_name="${container_name#/}"
+  echo "$_ORCHESTRATOR_NAMES_CACHE" | grep -qF "$clean_name"
+}
+
+# ── Skip logic (shared by unhealthy + dependency checks) ────────────
+
+# Returns 0 (true) if this container should be skipped
+# shellcheck disable=2039
+should_skip_container() {
+  local container_id="$1"
+  local container_name="$2"
+  local labels_json="$3"
+  local date_str
+  date_str=$(date +%d-%m-%Y" "%H:%M:%S)
+
+  # Check orchestrator activity (Watchtower, etc.)
+  if [ "$AUTOHEAL_WATCHTOWER_COOLDOWN" -gt 0 ] 2>/dev/null; then
+    if [ "$AUTOHEAL_WATCHTOWER_SCOPE" = "affected" ]; then
+      if is_container_in_orchestration "$container_name"; then
+        echo "$date_str Container $container_name (${container_id:0:12}) affected by orchestration activity within ${AUTOHEAL_WATCHTOWER_COOLDOWN}s - skipping"
+        return 0
+      fi
+    else
+      # Default (all): skip ALL containers when any orchestration detected
+      if is_orchestrator_active; then
+        echo "$date_str Container $container_name (${container_id:0:12}) skipped - orchestration activity detected within ${AUTOHEAL_WATCHTOWER_COOLDOWN}s"
+        return 0
+      fi
+    fi
+  fi
+
+  # Check grace period (fallback)
+  if is_within_grace_period "$container_id"; then
+    echo "$date_str Container $container_name (${container_id:0:12}) stopped within grace period (${AUTOHEAL_GRACE_PERIOD}s) - skipping"
+    return 0
+  fi
+
+  # Check backup awareness
+  if is_backup_managed "$labels_json" && is_backup_running; then
+    echo "$date_str Container $container_name (${container_id:0:12}) managed by backup (currently running) - skipping"
+    return 0
+  fi
+
+  return 1
+}
+
+# ── Original autoheal: unhealthy container monitoring ────────────────
+
 # shellcheck disable=2039
 get_container_info() {
   local label_filter
   local running_filter
   local url
 
-  # Set container selector
-  if [ "$AUTOHEAL_CONTAINER_LABEL" = "all" ]
-  then
+  if [ "$AUTOHEAL_CONTAINER_LABEL" = "all" ]; then
     label_filter=""
   else
     label_filter=",\"label\":\[\"${AUTOHEAL_CONTAINER_LABEL}=true\"\]"
   fi
-  if [ "$AUTOHEAL_ONLY_MONITOR_RUNNING" = false ]
-  then
+  if [ "$AUTOHEAL_ONLY_MONITOR_RUNNING" = false ]; then
     running_filter=""
   else
     running_filter=",\"status\":\[\"running\"\]"
@@ -67,7 +318,6 @@ get_container_info() {
   docker_curl "$url"
 }
 
-# shellcheck disable=2039
 restart_container() {
   local container_id="$1"
   local timeout="$2"
@@ -75,51 +325,141 @@ restart_container() {
   docker_curl -f -X POST "${HTTP_ENDPOINT}/containers/${container_id}/restart?t=${timeout}"
 }
 
-notify_webhook() {
-  local text="$@"
+# shellcheck disable=2039
+check_unhealthy() {
+  STOP_TIMEOUT=".Labels[\"autoheal.stop.timeout\"] // $AUTOHEAL_DEFAULT_STOP_TIMEOUT"
+  get_container_info | \
+    jq -r ".[] | select(.Labels[\"autoheal\"] != \"False\") | foreach . as \$CONTAINER([];[]; \$CONTAINER | .Id, .Names[0], .State, .Labels | tojson, ${STOP_TIMEOUT})" | \
+    while read -r CONTAINER_ID && read -r CONTAINER_NAME && read -r CONTAINER_STATE && read -r CONTAINER_LABELS && read -r TIMEOUT
+  do
+    # shellcheck disable=2039
+    CONTAINER_SHORT_ID=${CONTAINER_ID:0:12}
+    DATE=$(date +%d-%m-%Y" "%H:%M:%S)
 
-  if [ -n "$WEBHOOK_URL" ]
-  then
-    # execute webhook requests as background process to prevent healer from blocking
-    curl -s -X POST -H "Content-type: application/json" -d "$(generate_webhook_payload $text)"  "$WEBHOOK_URL"
+    if [ "$CONTAINER_NAME" = "null" ]; then
+      echo "$DATE Container name of (${CONTAINER_SHORT_ID}) is null, which implies container does not exist - don't restart" >&2
+    elif [ "$CONTAINER_STATE" = "restarting" ]; then
+      echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be restarting - don't restart"
+    elif should_skip_container "$CONTAINER_ID" "$CONTAINER_NAME" "$CONTAINER_LABELS"; then
+      : # skip message already printed by should_skip_container
+    else
+      echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be unhealthy - Restarting container now with ${TIMEOUT}s timeout"
+      if ! restart_container "$CONTAINER_ID" "$TIMEOUT"; then
+        echo "$DATE Restarting container $CONTAINER_SHORT_ID failed" >&2
+        notify_webhook "Container ${CONTAINER_NAME#/} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!"
+      else
+        notify_webhook "Container ${CONTAINER_NAME#/} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!"
+      fi
+      notify_post_restart_script "$CONTAINER_NAME" "$CONTAINER_SHORT_ID" "$CONTAINER_STATE" "$TIMEOUT"
+    fi
+  done
+}
+
+# ── Feature 1: Dependency orphan monitoring ──────────────────────────
+
+start_container() {
+  local container_id="$1"
+  docker_curl -f -X POST "${HTTP_ENDPOINT}/containers/${container_id}/start"
+}
+
+# shellcheck disable=2039
+check_dependency_orphans() {
+  if [ "$AUTOHEAL_MONITOR_DEPENDENCIES" != "true" ]; then
+    return
   fi
 
-  if [ -n "$APPRISE_URL" ]
-  then
-    # execute webhook requests as background process to prevent healer from blocking
-    curl -s -X POST -H "Content-type: application/json" -d "$(generate_apprise_payload $text)"  "$APPRISE_URL"
+  # Get all exited containers
+  local exited
+  exited=$(docker_curl "${HTTP_ENDPOINT}/containers/json?all=true&filters=%7B%22status%22%3A%5B%22exited%22%5D%7D")
+
+  if [ -z "$exited" ] || [ "$exited" = "[]" ] || [ "$exited" = "null" ]; then
+    return
   fi
+
+  # Extract IDs of exited containers
+  echo "$exited" | jq -r '.[].Id' | while read -r CONTAINER_ID; do
+    [ -z "$CONTAINER_ID" ] && continue
+
+    # Inspect to get NetworkMode, exit code, name, labels
+    local inspect
+    inspect=$(docker_curl "${HTTP_ENDPOINT}/containers/${CONTAINER_ID}/json")
+
+    [ -z "$inspect" ] || [ "$inspect" = "null" ] && continue
+
+    local network_mode exit_code container_name labels_json
+    network_mode=$(echo "$inspect" | jq -r '.HostConfig.NetworkMode // empty')
+    exit_code=$(echo "$inspect" | jq -r '.State.ExitCode // empty')
+    container_name=$(echo "$inspect" | jq -r '.Name // empty')
+    labels_json=$(echo "$inspect" | jq -r '.Config.Labels // {}')
+
+    # Only act on containers using container:X network mode
+    case "$network_mode" in
+      container:*) ;;
+      *) continue ;;
+    esac
+
+    # Extract parent container ID from network mode
+    local parent_id
+    parent_id=${network_mode#container:}
+
+    # Check parent is running (not restarting, not exited)
+    local parent_state
+    parent_state=$(docker_curl "${HTTP_ENDPOINT}/containers/${parent_id}/json" | \
+      jq -r '.State.Status // empty' 2>/dev/null)
+
+    if [ "$parent_state" != "running" ]; then
+      continue
+    fi
+
+    # shellcheck disable=2039
+    local short_id="${CONTAINER_ID:0:12}"
+    local DATE
+    DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+
+    # Apply guards
+    if should_skip_container "$CONTAINER_ID" "$container_name" "$labels_json"; then
+      continue
+    fi
+
+    echo "$DATE Container $container_name ($short_id) exited (code $exit_code, orphaned dependent) - parent ${parent_id:0:12} is running"
+
+    # Wait for start delay, then re-verify parent
+    if [ "$AUTOHEAL_DEPENDENCY_START_DELAY" -gt 0 ] 2>/dev/null; then
+      echo "$DATE Waiting ${AUTOHEAL_DEPENDENCY_START_DELAY}s before starting $container_name..."
+      sleep "$AUTOHEAL_DEPENDENCY_START_DELAY"
+
+      # Re-check parent is still running
+      parent_state=$(docker_curl "${HTTP_ENDPOINT}/containers/${parent_id}/json" | \
+        jq -r '.State.Status // empty' 2>/dev/null)
+      if [ "$parent_state" != "running" ]; then
+        echo "$DATE Parent ${parent_id:0:12} no longer running after delay - skipping $container_name"
+        continue
+      fi
+    fi
+
+    # Re-check container is still exited (Docker restart policy may have handled it)
+    local current_state
+    current_state=$(docker_curl "${HTTP_ENDPOINT}/containers/${CONTAINER_ID}/json" | \
+      jq -r '.State.Status // empty' 2>/dev/null)
+    if [ "$current_state" != "exited" ]; then
+      echo "$DATE Container $container_name ($short_id) is now $current_state - no action needed"
+      continue
+    fi
+
+    echo "$DATE Starting orphaned dependent $container_name ($short_id)..."
+    if ! start_container "$CONTAINER_ID"; then
+      echo "$DATE Failed to start $container_name ($short_id)" >&2
+      notify_webhook "Container ${container_name#/} ($short_id) orphaned (parent running). Failed to start!"
+    else
+      echo "$DATE Successfully started $container_name ($short_id)"
+      notify_webhook "Container ${container_name#/} ($short_id) orphaned (parent running). Successfully started!"
+    fi
+    notify_post_restart_script "$container_name" "$short_id" "orphaned" "0"
+  done
 }
 
-notify_post_restart_script() {
-  if [ -n "$POST_RESTART_SCRIPT" ]
-  then
-    # execute post restart script as background process to prevent healer from blocking
-    $POST_RESTART_SCRIPT "$@" &
-  fi
-}
+# ── Signal handling ──────────────────────────────────────────────────
 
-# https://towardsdatascience.com/proper-ways-to-pass-environment-variables-in-json-for-curl-post-f797d2698bf3
-generate_webhook_payload() {
-  local text="$@"
-  cat <<EOF
-{
-  "$WEBHOOK_JSON_KEY":"$text"
-}
-EOF
-}
-
-generate_apprise_payload() {
-  local text="$@"
-  cat <<EOF
-{
-  "title":"Autoheal",
-  "body":"$text"
-}
-EOF
-}
-
-# SIGTERM-handler
 term_handler() {
   exit 143  # 128 + 15 -- SIGTERM
 }
@@ -127,50 +467,32 @@ term_handler() {
 # shellcheck disable=2039
 trap 'kill $$; term_handler' SIGTERM
 
-if [ "$1" = "autoheal" ]
-then
-  if [ -n "$UNIX_SOCK" ] && ! [ -S "$DOCKER_SOCK" ]
-  then
+# ── Main loop ────────────────────────────────────────────────────────
+
+if [ "$1" = "autoheal" ]; then
+  if [ -n "$UNIX_SOCK" ] && ! [ -S "$DOCKER_SOCK" ]; then
     echo "unix socket is currently not available" >&2
     exit 1
   fi
+
   # Delayed startup
-  if [ "$AUTOHEAL_START_PERIOD" -gt 0 ]
-  then
-  echo "Monitoring containers for unhealthy status in $AUTOHEAL_START_PERIOD second(s)"
+  if [ "$AUTOHEAL_START_PERIOD" -gt 0 ]; then
+    echo "Monitoring containers in $AUTOHEAL_START_PERIOD second(s)"
     sleep "$AUTOHEAL_START_PERIOD" &
     wait $!
   fi
 
-  while true
-  do
-    STOP_TIMEOUT=".Labels[\"autoheal.stop.timeout\"] // $AUTOHEAL_DEFAULT_STOP_TIMEOUT"
-    get_container_info | \
-      jq -r ".[] | select(.Labels[\"autoheal\"] != \"False\") | foreach . as \$CONTAINER([];[]; \$CONTAINER | .Id, .Names[0], .State, ${STOP_TIMEOUT})" | \
-      while read -r CONTAINER_ID && read -r CONTAINER_NAME && read -r CONTAINER_STATE && read -r TIMEOUT
-    do
-      # shellcheck disable=2039
-      CONTAINER_SHORT_ID=${CONTAINER_ID:0:12}
-      DATE=$(date +%d-%m-%Y" "%H:%M:%S)
+  _CURRENT_CYCLE=0
 
-      if [ "$CONTAINER_NAME" = "null" ]
-      then
-        echo "$DATE Container name of (${CONTAINER_SHORT_ID}) is null, which implies container does not exist - don't restart" >&2
-      elif [ "$CONTAINER_STATE" = "restarting" ]
-      then
-        echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be restarting - don't restart"
-      else
-        echo "$DATE Container $CONTAINER_NAME (${CONTAINER_SHORT_ID}) found to be unhealthy - Restarting container now with ${TIMEOUT}s timeout"
-        if ! restart_container "$CONTAINER_ID" "$TIMEOUT"
-        then
-          echo "$DATE Restarting container $CONTAINER_SHORT_ID failed" >&2
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
-        else
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
-        fi
-        notify_post_restart_script "$CONTAINER_NAME" "$CONTAINER_SHORT_ID" "$CONTAINER_STATE" "$TIMEOUT" &
-      fi
-    done
+  while true; do
+    _CURRENT_CYCLE=$((_CURRENT_CYCLE + 1))
+
+    # Check 1: unhealthy containers (original autoheal)
+    check_unhealthy
+
+    # Check 2: dependency orphans (Docker-Guardian)
+    check_dependency_orphans
+
     sleep "$AUTOHEAL_INTERVAL" &
     wait $!
   done
