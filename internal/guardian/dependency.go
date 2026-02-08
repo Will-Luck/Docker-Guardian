@@ -46,7 +46,7 @@ func (g *Guardian) checkDependencyOrphans(ctx context.Context) {
 			continue
 		}
 
-		now := time.Now().Format("02-01-2006 15:04:05")
+		now := g.clock.Now().Format("02-01-2006 15:04:05")
 		fmt.Printf("%s Container %s (%s) exited (code %d, orphaned dependent) - parent %s is running\n",
 			now, name, shortID, exitCode, parentID[:12])
 
@@ -77,10 +77,10 @@ func (g *Guardian) checkDependencyOrphans(ctx context.Context) {
 		fmt.Printf("%s Starting orphaned dependent %s (%s)...\n", now, name, shortID)
 		if err := g.docker.StartContainer(ctx, c.ID); err != nil {
 			g.log.Error("failed to start container", "container", name, "id", shortID, "error", err)
-			g.dispatcher.Action(fmt.Sprintf("Container %s (%s) orphaned (parent running). Failed to start!", name, shortID))
+			g.notifier.Action(fmt.Sprintf("Container %s (%s) orphaned (parent running). Failed to start!", name, shortID))
 		} else {
 			fmt.Printf("%s Successfully started %s (%s)\n", now, name, shortID)
-			g.dispatcher.Action(fmt.Sprintf("Container %s (%s) orphaned (parent running). Successfully started!", name, shortID))
+			g.notifier.Action(fmt.Sprintf("Container %s (%s) orphaned (parent running). Successfully started!", name, shortID))
 		}
 
 		g.runPostRestartScript(name, shortID, "orphaned", 0)
