@@ -161,7 +161,7 @@ send_to_gotify() {
   if [ -z "$NOTIFY_GOTIFY_URL" ] || [ -z "$NOTIFY_GOTIFY_TOKEN" ]; then return; fi
   curl -s -X POST "${NOTIFY_GOTIFY_URL}/message?token=${NOTIFY_GOTIFY_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"title\":\"Docker-Guardian\",\"message\":\"${text}\",\"priority\":5}" &
+    -d "$(jq -n --arg msg "$text" '{"title":"Docker-Guardian","message":$msg,"priority":5}')" &
 }
 
 send_to_discord() {
@@ -169,7 +169,7 @@ send_to_discord() {
   if [ -z "$NOTIFY_DISCORD_WEBHOOK" ]; then return; fi
   curl -s -X POST "$NOTIFY_DISCORD_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d "{\"embeds\":[{\"title\":\"Docker-Guardian\",\"description\":\"${text}\",\"color\":3066993}]}" &
+    -d "$(jq -n --arg desc "$text" '{"embeds":[{"title":"Docker-Guardian","description":$desc,"color":3066993}]}')" &
 }
 
 send_to_slack() {
@@ -177,7 +177,7 @@ send_to_slack() {
   if [ -z "$NOTIFY_SLACK_WEBHOOK" ]; then return; fi
   curl -s -X POST "$NOTIFY_SLACK_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d "{\"text\":\"*Docker-Guardian*\n${text}\"}" &
+    -d "$(jq -n --arg txt "*Docker-Guardian*\n$text" '{"text":$txt}')" &
 }
 
 send_to_telegram() {
@@ -185,7 +185,7 @@ send_to_telegram() {
   if [ -z "$NOTIFY_TELEGRAM_TOKEN" ] || [ -z "$NOTIFY_TELEGRAM_CHAT_ID" ]; then return; fi
   curl -s -X POST "https://api.telegram.org/bot${NOTIFY_TELEGRAM_TOKEN}/sendMessage" \
     -H "Content-Type: application/json" \
-    -d "{\"chat_id\":\"${NOTIFY_TELEGRAM_CHAT_ID}\",\"text\":\"Docker-Guardian: ${text}\"}" &
+    -d "$(jq -n --arg chat "$NOTIFY_TELEGRAM_CHAT_ID" --arg txt "Docker-Guardian: $text" '{"chat_id":$chat,"text":$txt}')" &
 }
 
 send_to_pushover() {
@@ -201,7 +201,7 @@ send_to_pushbullet() {
   curl -s -X POST "https://api.pushbullet.com/v2/pushes" \
     -H "Access-Token: ${NOTIFY_PUSHBULLET_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"type\":\"note\",\"title\":\"Docker-Guardian\",\"body\":\"${text}\"}" &
+    -d "$(jq -n --arg body "$text" '{"type":"note","title":"Docker-Guardian","body":$body}')" &
 }
 
 send_to_lunasea() {
@@ -209,7 +209,7 @@ send_to_lunasea() {
   if [ -z "$NOTIFY_LUNASEA_WEBHOOK" ]; then return; fi
   curl -s -X POST "$NOTIFY_LUNASEA_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d "{\"title\":\"Docker-Guardian\",\"body\":\"${text}\"}" &
+    -d "$(jq -n --arg body "$text" '{"title":"Docker-Guardian","body":$body}')" &
 }
 
 send_to_email() {
@@ -226,17 +226,11 @@ send_to_email() {
 # ── Notification dispatcher ──────────────────────────────────────────
 
 generate_webhook_payload() {
-  local text="$@"
-  cat <<EOF
-{"$WEBHOOK_JSON_KEY":"$text"}
-EOF
+  jq -n --arg key "$WEBHOOK_JSON_KEY" --arg val "$1" '{($key): $val}'
 }
 
 generate_apprise_payload() {
-  local text="$@"
-  cat <<EOF
-{"title":"Docker-Guardian","body":"$text"}
-EOF
+  jq -n --arg body "$1" '{"title":"Docker-Guardian","body":$body}'
 }
 
 # Internal dispatch — sends to all configured services
@@ -304,7 +298,7 @@ notify_startup() {
 
 notify_post_restart_script() {
   if [ -n "$POST_RESTART_SCRIPT" ]; then
-    $POST_RESTART_SCRIPT "$@" &
+    "$POST_RESTART_SCRIPT" "$@" &
   fi
 }
 
@@ -425,7 +419,7 @@ _fetch_orchestrator_events() {
 
   if [ -n "$events" ]; then
     _ORCHESTRATOR_ACTIVE_CACHE="yes"
-    _ORCHESTRATOR_NAMES_CACHE=$(echo "$events" | jq -r '.Actor.Attributes.name // empty' 2>/dev/null)
+    _ORCHESTRATOR_NAMES_CACHE=$(echo "$events" | jq -r '.Actor.Attributes.name // empty' 2>/dev/null | sort -u)
     local event_count
     event_count=$(echo "$events" | wc -l)
     local date_str
@@ -532,9 +526,8 @@ restart_container() {
 
 # shellcheck disable=2039
 check_unhealthy() {
-  STOP_TIMEOUT=".Labels[\"autoheal.stop.timeout\"] // $AUTOHEAL_DEFAULT_STOP_TIMEOUT"
   get_container_info | \
-    jq -r ".[] | select(.Labels[\"autoheal\"] != \"False\") | foreach . as \$CONTAINER([];[]; \$CONTAINER | .Id, .Names[0], .State, .Labels | tojson, ${STOP_TIMEOUT})" | \
+    jq -r '.[] | select(.Labels["autoheal"] != "False") | foreach . as $CONTAINER([];[]; $CONTAINER | .Id, .Names[0], .State, (.Labels | tojson), (.Labels["autoheal.stop.timeout"] // '"$AUTOHEAL_DEFAULT_STOP_TIMEOUT"'))' | \
     while read -r CONTAINER_ID && read -r CONTAINER_NAME && read -r CONTAINER_STATE && read -r CONTAINER_LABELS && read -r TIMEOUT
   do
     # shellcheck disable=2039

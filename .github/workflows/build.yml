@@ -19,6 +19,9 @@ jobs:
       - name: Build image
         run: docker build -t docker-guardian .
 
+      - name: Run healthcheck test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-healthcheck.sh
+
       - name: Run dependency test
         run: GUARDIAN_IMAGE=docker-guardian bash tests/test-dependency.sh
 
@@ -27,6 +30,12 @@ jobs:
 
       - name: Run grace period test
         run: GUARDIAN_IMAGE=docker-guardian bash tests/test-grace.sh
+
+      - name: Run watchtower test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-watchtower.sh
+
+      - name: Run notifications test
+        run: GUARDIAN_IMAGE=docker-guardian bash tests/test-notifications.sh
 
   build:
     needs: test
