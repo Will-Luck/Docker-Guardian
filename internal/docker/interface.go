@@ -20,6 +20,7 @@ type API interface {
 	StopContainer(ctx context.Context, id string, timeout int) error
 	ContainerStatus(ctx context.Context, id string) (string, error)
 	ContainerFinishedAt(ctx context.Context, id string) (time.Time, error)
+	ContainerHealthLog(ctx context.Context, id string) (string, error)
 	ContainerEvents(ctx context.Context, since, until time.Time, orchestrationOnly bool) ([]events.Message, error)
 	Close() error
 }

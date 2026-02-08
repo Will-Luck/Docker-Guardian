@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -86,6 +87,24 @@ func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error)
 		return "", err
 	}
 	return string(info.Container.State.Status), nil
+}
+
+// ContainerHealthLog returns the output from the last healthcheck log entry.
+// Returns empty string if no health log is available.
+func (c *Client) ContainerHealthLog(ctx context.Context, id string) (string, error) {
+	info, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", err
+	}
+	health := info.Container.State.Health
+	if health == nil || len(health.Log) == 0 {
+		return "", nil
+	}
+	output := strings.TrimSpace(health.Log[len(health.Log)-1].Output)
+	if len(output) > 200 {
+		output = output[:200] + "..."
+	}
+	return output, nil
 }
 
 // ContainerFinishedAt returns when the container last stopped.

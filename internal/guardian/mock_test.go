@@ -40,6 +40,9 @@ type mockDocker struct {
 	finishedAtResults map[string]time.Time
 	finishedAtErr     map[string]error
 
+	healthLogResults map[string]string
+	healthLogErr     map[string]error
+
 	containerEvents    []events.Message
 	containerEventsErr error
 }
@@ -55,6 +58,8 @@ func newMockDocker() *mockDocker {
 		statusErr:         make(map[string]error),
 		finishedAtResults: make(map[string]time.Time),
 		finishedAtErr:     make(map[string]error),
+		healthLogResults:  make(map[string]string),
+		healthLogErr:      make(map[string]error),
 	}
 }
 
@@ -119,6 +124,13 @@ func (m *mockDocker) ContainerFinishedAt(_ context.Context, id string) (time.Tim
 		return time.Time{}, err
 	}
 	return m.finishedAtResults[id], nil
+}
+
+func (m *mockDocker) ContainerHealthLog(_ context.Context, id string) (string, error) {
+	if err, ok := m.healthLogErr[id]; ok && err != nil {
+		return "", err
+	}
+	return m.healthLogResults[id], nil
 }
 
 func (m *mockDocker) ContainerEvents(_ context.Context, _, _ time.Time, _ bool) ([]events.Message, error) {

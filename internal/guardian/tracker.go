@@ -30,10 +30,11 @@ func DefaultTrackerConfig() TrackerConfig {
 
 // ContainerHistory tracks restart history for a single container.
 type ContainerHistory struct {
-	Restarts     []time.Time   // timestamps of recent restarts
-	BackoffUntil time.Time     // next allowed restart time
-	BackoffDelay time.Duration // current backoff delay
-	CircuitOpen  bool          // true = budget exhausted
+	Restarts       []time.Time   // timestamps of recent restarts
+	BackoffUntil   time.Time     // next allowed restart time
+	BackoffDelay   time.Duration // current backoff delay
+	CircuitOpen    bool          // true = budget exhausted
+	UnhealthyCount int           // consecutive unhealthy detections
 }
 
 // SkipReason describes why a restart was suppressed.
@@ -114,6 +115,38 @@ func (rt *RestartTracker) RecordRestart(id string) {
 		h.BackoffDelay = rt.cfg.BackoffMax
 	}
 	h.BackoffUntil = now.Add(h.BackoffDelay)
+}
+
+// RecordUnhealthy increments the unhealthy counter for a container.
+// Returns true if the threshold is reached and action should be taken.
+func (rt *RestartTracker) RecordUnhealthy(id string, threshold int) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	h := rt.getOrCreate(id)
+	h.UnhealthyCount++
+	return h.UnhealthyCount >= threshold
+}
+
+// UnhealthyCount returns the current consecutive unhealthy count for a container.
+func (rt *RestartTracker) UnhealthyCount(id string) int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	if h, ok := rt.history[id]; ok {
+		return h.UnhealthyCount
+	}
+	return 0
+}
+
+// ResetUnhealthy clears the unhealthy counter for a container.
+func (rt *RestartTracker) ResetUnhealthy(id string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	if h, ok := rt.history[id]; ok {
+		h.UnhealthyCount = 0
+	}
 }
 
 // Reset clears backoff and restart history for a container (e.g. when it becomes healthy).

@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.2.0] - 2026-02-08
+
+### Added
+- **Timezone support**: `TZ` env var works out of the box (tzdata added to Alpine image). Fixes upstream [#143](https://github.com/willfarrell/docker-autoheal/issues/143)
+- **Skip paused containers**: Paused containers reporting unhealthy are no longer restarted. Fixes upstream [#98](https://github.com/willfarrell/docker-autoheal/issues/98)
+- **Custom hostname in notifications**: `NOTIFY_HOSTNAME` env var prepends `[hostname]` to all notification messages. Fixes upstream [#118](https://github.com/willfarrell/docker-autoheal/issues/118)
+- **Per-container notification filtering**: `autoheal.notify=false` label suppresses notifications while still performing the configured action. Fixes upstream [#140](https://github.com/willfarrell/docker-autoheal/issues/140)
+- **Healthcheck output in notifications**: Restart notifications now include the last healthcheck output (truncated to 200 chars) for immediate context. Fixes upstream [#81](https://github.com/willfarrell/docker-autoheal/issues/81)
+- **Unhealthy threshold**: `AUTOHEAL_UNHEALTHY_THRESHOLD` env var requires N consecutive unhealthy checks before action (default 1 = immediate, preserving existing behaviour). Fixes upstream [#78](https://github.com/willfarrell/docker-autoheal/issues/78)
+
 ## [1.2.0] - 2026-02-08
 
 ### Added

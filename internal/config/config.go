@@ -33,6 +33,9 @@ type Config struct {
 	WatchtowerScope      string // "all" or "affected"
 	WatchtowerEvents     string // "orchestration" or "all"
 
+	// Unhealthy threshold
+	UnhealthyThreshold int // consecutive unhealthy checks before action (1 = immediate)
+
 	// Circuit breaker / backoff
 	BackoffMultiplier float64
 	BackoffMax        int // seconds
@@ -45,7 +48,8 @@ type Config struct {
 
 	// Notification events
 	NotifyEvents    string
-	NotifyRateLimit int // seconds (0 = unlimited)
+	NotifyRateLimit int    // seconds (0 = unlimited)
+	NotifyHostname  string // prepended to all notifications as [hostname]
 
 	// Notification services
 	WebhookURL     string
@@ -102,6 +106,8 @@ func Load() *Config {
 		WatchtowerScope:      envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
 		WatchtowerEvents:     envStr("AUTOHEAL_WATCHTOWER_EVENTS", "orchestration"),
 
+		UnhealthyThreshold: envInt("AUTOHEAL_UNHEALTHY_THRESHOLD", 1),
+
 		BackoffMultiplier: envFloat("AUTOHEAL_BACKOFF_MULTIPLIER", 2),
 		BackoffMax:        envInt("AUTOHEAL_BACKOFF_MAX", 300),
 		BackoffResetAfter: envInt("AUTOHEAL_BACKOFF_RESET_AFTER", 600),
@@ -111,6 +117,7 @@ func Load() *Config {
 		PostRestartScript: envStr("POST_RESTART_SCRIPT", ""),
 		NotifyEvents:      envStr("NOTIFY_EVENTS", "actions"),
 		NotifyRateLimit:   envInt("NOTIFY_RATE_LIMIT", 60),
+		NotifyHostname:    envStr("NOTIFY_HOSTNAME", ""),
 
 		WebhookURL:     envStr("WEBHOOK_URL", ""),
 		WebhookJSONKey: envStr("WEBHOOK_JSON_KEY", "text"),
@@ -159,6 +166,7 @@ func (c *Config) PrintBanner() {
 	fmt.Println("AUTOHEAL_WATCHTOWER_COOLDOWN=" + strconv.Itoa(c.WatchtowerCooldown))
 	fmt.Println("AUTOHEAL_WATCHTOWER_SCOPE=" + c.WatchtowerScope)
 	fmt.Println("AUTOHEAL_WATCHTOWER_EVENTS=" + c.WatchtowerEvents)
+	fmt.Println("AUTOHEAL_UNHEALTHY_THRESHOLD=" + strconv.Itoa(c.UnhealthyThreshold))
 	fmt.Printf("AUTOHEAL_BACKOFF_MULTIPLIER=%g\n", c.BackoffMultiplier)
 	fmt.Println("AUTOHEAL_BACKOFF_MAX=" + strconv.Itoa(c.BackoffMax))
 	fmt.Println("AUTOHEAL_BACKOFF_RESET_AFTER=" + strconv.Itoa(c.BackoffResetAfter))
@@ -205,6 +213,9 @@ func (c *Config) Validate() error {
 	}
 	if c.GracePeriod < 0 {
 		errs = append(errs, fmt.Errorf("AUTOHEAL_GRACE_PERIOD must be >= 0, got %d", c.GracePeriod))
+	}
+	if c.UnhealthyThreshold < 1 {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_UNHEALTHY_THRESHOLD must be >= 1, got %d", c.UnhealthyThreshold))
 	}
 	if c.DefaultStopTimeout < 0 {
 		errs = append(errs, fmt.Errorf("AUTOHEAL_DEFAULT_STOP_TIMEOUT must be >= 0, got %d", c.DefaultStopTimeout))

@@ -10,6 +10,14 @@ import (
 	"github.com/Will-Luck/Docker-Guardian/internal/metrics"
 )
 
+// shouldNotify returns false if the container has autoheal.notify=false label.
+func shouldNotify(labels map[string]string) bool {
+	if v, ok := labels["autoheal.notify"]; ok {
+		return v != "false" && v != "False"
+	}
+	return true
+}
+
 // containerAction returns the action to take for a container based on its labels.
 // Possible values: "restart" (default), "stop", "notify", "none".
 func containerAction(labels map[string]string) string {
@@ -53,10 +61,27 @@ func (g *Guardian) checkUnhealthy(ctx context.Context) {
 			continue
 		}
 
+		if string(c.State) == "paused" {
+			now := g.clock.Now().Format("02-01-2006 15:04:05")
+			fmt.Printf("%s Container %s (%s) is paused - skipping\n", now, name, shortID)
+			continue
+		}
+
 		if string(c.State) == "restarting" {
 			now := g.clock.Now().Format("02-01-2006 15:04:05")
 			fmt.Printf("%s Container %s (%s) found to be restarting - don't restart\n", now, name, shortID)
 			continue
+		}
+
+		// Check unhealthy threshold (default 1 = immediate action)
+		if g.cfg.UnhealthyThreshold > 1 {
+			if !g.tracker.RecordUnhealthy(id, g.cfg.UnhealthyThreshold) {
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
+				count := g.tracker.UnhealthyCount(id)
+				fmt.Printf("%s Container %s (%s) unhealthy (%d/%d) - waiting for threshold\n",
+					now, name, shortID, count, g.cfg.UnhealthyThreshold)
+				continue
+			}
 		}
 
 		if g.shouldSkip(ctx, id, name, c.Labels) {
@@ -92,12 +117,17 @@ func (g *Guardian) checkUnhealthy(ctx context.Context) {
 		if action == "stop" {
 			now := g.clock.Now().Format("02-01-2006 15:04:05")
 			fmt.Printf("%s Container %s (%s) found to be unhealthy - Stopping container (action=stop)\n", now, name, shortID)
+			notify := shouldNotify(c.Labels)
 			if err := g.docker.StopContainer(ctx, id, timeout); err != nil {
 				g.log.Error("failed to stop container", "container", name, "id", shortID, "error", err)
-				g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Failed to stop (quarantine)!", name, shortID))
+				if notify {
+					g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Failed to stop (quarantine)!", name, shortID))
+				}
 				metrics.RestartsTotal.WithLabelValues(name, "failure").Inc()
 			} else {
-				g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Stopped (quarantined).", name, shortID))
+				if notify {
+					g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Stopped (quarantined).", name, shortID))
+				}
 				metrics.RestartsTotal.WithLabelValues(name, "success").Inc()
 			}
 			g.tracker.RecordRestart(id)
@@ -109,13 +139,24 @@ func (g *Guardian) checkUnhealthy(ctx context.Context) {
 		fmt.Printf("%s Container %s (%s) found to be unhealthy - Restarting container now with %ds timeout\n",
 			now, name, shortID, timeout)
 
+		// Fetch healthcheck output before restart (for notification context)
+		healthSuffix := ""
+		if healthLog, err := g.docker.ContainerHealthLog(ctx, id); err == nil && healthLog != "" {
+			healthSuffix = " Health output: " + healthLog
+		}
+
+		notify := shouldNotify(c.Labels)
 		start := time.Now()
 		if err := g.docker.RestartContainer(ctx, id, timeout); err != nil {
 			g.log.Error("failed to restart container", "container", name, "id", shortID, "error", err)
-			g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Failed to restart the container!", name, shortID))
+			if notify {
+				g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Failed to restart the container!%s", name, shortID, healthSuffix))
+			}
 			metrics.RestartsTotal.WithLabelValues(name, "failure").Inc()
 		} else {
-			g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Successfully restarted the container!", name, shortID))
+			if notify {
+				g.notifier.Action(fmt.Sprintf("Container %s (%s) found to be unhealthy. Successfully restarted the container!%s", name, shortID, healthSuffix))
+			}
 			metrics.RestartsTotal.WithLabelValues(name, "success").Inc()
 		}
 		metrics.RestartDuration.WithLabelValues(name).Observe(time.Since(start).Seconds())

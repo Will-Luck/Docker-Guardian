@@ -87,6 +87,9 @@ docker run --label autoheal.action=none ...
 # Opt out (alternative to action=none)
 docker run --label autoheal=False ...
 
+# Suppress notifications for this container (still performs action)
+docker run --label autoheal.notify=false ...
+
 # Custom stop timeout per container
 docker run --label autoheal.stop.timeout=30 ...
 ```
@@ -227,6 +230,8 @@ All configuration via environment variables, matching the upstream autoheal patt
 
 | Variable | Default | Description |
 |---|---|---|
+| `AUTOHEAL_UNHEALTHY_THRESHOLD` | `1` | Consecutive unhealthy checks before action (`1` = immediate) |
+| `NOTIFY_HOSTNAME` | _(empty)_ | Hostname prepended as `[hostname]` to all notifications |
 | `AUTOHEAL_MONITOR_DEPENDENCIES` | `true` | Enable dependency orphan recovery |
 | `AUTOHEAL_DEPENDENCY_START_DELAY` | `5` | Seconds to wait before starting orphaned dependent |
 | `AUTOHEAL_BACKUP_LABEL` | `docker-volume-backup.stop-during-backup` | Label marking backup-managed containers |
@@ -266,10 +271,12 @@ All configuration via environment variables, matching the upstream autoheal patt
 Container event received
 ├── health_status: unhealthy
 │   ├── autoheal=False or action=none? → IGNORE
+│   ├── State = paused? → SKIP
+│   ├── State = restarting? → SKIP
+│   ├── Below unhealthy threshold? → SKIP (count N/M)
 │   ├── Orchestration active (Watchtower)? → SKIP
 │   ├── Within grace period? → SKIP
 │   ├── Backup-managed + backup running? → SKIP
-│   ├── State = restarting? → SKIP
 │   ├── action=notify? → NOTIFY ONLY
 │   ├── Circuit breaker open (budget exhausted)? → NOTIFY [CRITICAL]
 │   ├── Backoff active? → SKIP (wait for backoff)
@@ -346,6 +353,12 @@ docker buildx build --platform linux/amd64,linux/arm64 -t docker-guardian .
 | Grace period | No | Yes |
 | Notification rate limiting & retry | No | Yes |
 | Notification services | Webhook, Apprise | Webhook, Apprise + 8 native services |
+| Healthcheck output in notifications | No | Yes |
+| Per-container notification filtering | No | Yes |
+| Unhealthy threshold | No | Yes |
+| Custom hostname in notifications | No | Yes |
+| Timezone support (TZ) | No | Yes |
+| Skip paused containers | No | Yes |
 | Alpine version | 3.18 | 3.20 |
 
 ## Licence

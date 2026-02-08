@@ -174,6 +174,10 @@ func (d *Dispatcher) Skip(text string) {
 }
 
 func (d *Dispatcher) dispatch(text string, retry bool) {
+	if d.cfg.NotifyHostname != "" {
+		text = "[" + d.cfg.NotifyHostname + "] " + text
+	}
+
 	if d.hasEvent("debug") {
 		now := time.Now().Format("2006-01-02T15:04:05-0700")
 		services := d.ConfiguredServices()
