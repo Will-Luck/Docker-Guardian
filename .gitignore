@@ -2,3 +2,6 @@
 *.swo
 *~
 .DS_Store
+
+# Go build output
+/guardian
