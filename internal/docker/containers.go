@@ -11,8 +11,9 @@ import (
 // UnhealthyContainers returns containers with health status "unhealthy",
 // optionally filtered by label and running status.
 func (c *Client) UnhealthyContainers(ctx context.Context, label string, onlyRunning bool) ([]container.Summary, error) {
-	opts := client.ContainerListOptions{}
-	opts.Filters = opts.Filters.Add("health", "unhealthy")
+	opts := client.ContainerListOptions{
+		Filters: make(client.Filters).Add("health", "unhealthy"),
+	}
 	if label != "all" {
 		opts.Filters = opts.Filters.Add("label", label+"=true")
 	}
@@ -28,8 +29,10 @@ func (c *Client) UnhealthyContainers(ctx context.Context, label string, onlyRunn
 
 // ExitedContainers returns all containers with status "exited".
 func (c *Client) ExitedContainers(ctx context.Context) ([]container.Summary, error) {
-	opts := client.ContainerListOptions{All: true}
-	opts.Filters = opts.Filters.Add("status", "exited")
+	opts := client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("status", "exited"),
+	}
 	result, err := c.api.ContainerList(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -39,8 +42,9 @@ func (c *Client) ExitedContainers(ctx context.Context) ([]container.Summary, err
 
 // RunningContainers returns all containers with status "running".
 func (c *Client) RunningContainers(ctx context.Context) ([]container.Summary, error) {
-	opts := client.ContainerListOptions{}
-	opts.Filters = opts.Filters.Add("status", "running")
+	opts := client.ContainerListOptions{
+		Filters: make(client.Filters).Add("status", "running"),
+	}
 	result, err := c.api.ContainerList(ctx, opts)
 	if err != nil {
 		return nil, err

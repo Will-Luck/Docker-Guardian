@@ -2,4 +2,7 @@
 .gitignore
 .dockerignore
 Dockerfile
+Dockerfile.legacy
 tests
+guardian
+docker-entrypoint

@@ -16,15 +16,21 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 
 	// Orchestrator/Watchtower cooldown
 	if g.cfg.WatchtowerCooldown > 0 {
+		g.fetchOrchestrationEvents(ctx)
+
 		if g.cfg.WatchtowerScope == "affected" {
-			if g.isContainerInOrchestration(ctx, cleanName) {
-				g.log.Info(fmt.Sprintf("Container %s (%s) affected by orchestration activity - skipping", cleanName, shortID))
+			if g.isContainerInOrchestration(cleanName) {
+				now := time.Now().Format("02-01-2006 15:04:05")
+				fmt.Printf("%s Container %s (%s) affected by orchestration activity within %ds - skipping\n",
+					now, cleanName, shortID, g.cfg.WatchtowerCooldown)
 				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
 				return true
 			}
 		} else {
-			if g.isOrchestratorActive(ctx) {
-				g.log.Info(fmt.Sprintf("Container %s (%s) skipped - orchestration activity detected", cleanName, shortID))
+			if g.isOrchestratorActive() {
+				now := time.Now().Format("02-01-2006 15:04:05")
+				fmt.Printf("%s Container %s (%s) skipped - orchestration activity detected within %ds\n",
+					now, cleanName, shortID, g.cfg.WatchtowerCooldown)
 				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - orchestration activity", cleanName, shortID))
 				return true
 			}
@@ -37,7 +43,9 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 		if err == nil {
 			age := time.Since(finishedAt)
 			if age < time.Duration(g.cfg.GracePeriod)*time.Second {
-				g.log.Info(fmt.Sprintf("Container %s (%s) stopped within grace period (%ds) - skipping", cleanName, shortID, g.cfg.GracePeriod))
+				now := time.Now().Format("02-01-2006 15:04:05")
+				fmt.Printf("%s Container %s (%s) stopped within grace period (%ds) - skipping\n",
+					now, cleanName, shortID, g.cfg.GracePeriod)
 				g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - grace period", cleanName, shortID))
 				return true
 			}
@@ -45,8 +53,10 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 	}
 
 	// Backup awareness
-	if g.isBackupManaged(labels) && g.isBackupRunning(ctx) {
-		g.log.Info(fmt.Sprintf("Container %s (%s) managed by backup (currently running) - skipping", cleanName, shortID))
+	if g.isBackupManaged(labels) && g.cachedBackupRunning(ctx) {
+		now := time.Now().Format("02-01-2006 15:04:05")
+		fmt.Printf("%s Container %s (%s) managed by backup (currently running) - skipping\n",
+			now, cleanName, shortID)
 		g.dispatcher.Skip(fmt.Sprintf("Container %s (%s) skipped - backup running", cleanName, shortID))
 		return true
 	}
@@ -54,33 +64,40 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 	return false
 }
 
-// isOrchestratorActive checks if any container lifecycle events occurred
-// within the watchtower cooldown window.
-func (g *Guardian) isOrchestratorActive(ctx context.Context) bool {
+// fetchOrchestrationEvents queries Docker events once per cycle and caches the result.
+// Also logs a summary line when events are detected.
+func (g *Guardian) fetchOrchestrationEvents(ctx context.Context) {
+	if g.orchestratorCached {
+		return
+	}
+	g.orchestratorCached = true
+	g.orchestratorEvents = nil
+
 	now := time.Now()
 	since := now.Add(-time.Duration(g.cfg.WatchtowerCooldown) * time.Second)
 	orchestrationOnly := g.cfg.WatchtowerEvents != "all"
 
 	events, err := g.docker.ContainerEvents(ctx, since, now, orchestrationOnly)
 	if err != nil {
-		return false
+		return
 	}
-	return len(events) > 0
+	g.orchestratorEvents = events
+
+	if len(events) > 0 {
+		dateStr := time.Now().Format("02-01-2006 15:04:05")
+		fmt.Printf("%s Orchestration activity detected: %d container event(s) within %ds cooldown\n",
+			dateStr, len(events), g.cfg.WatchtowerCooldown)
+	}
 }
 
-// isContainerInOrchestration checks if this specific container had events
-// within the cooldown window.
-func (g *Guardian) isContainerInOrchestration(ctx context.Context, containerName string) bool {
-	now := time.Now()
-	since := now.Add(-time.Duration(g.cfg.WatchtowerCooldown) * time.Second)
-	orchestrationOnly := g.cfg.WatchtowerEvents != "all"
+// isOrchestratorActive returns true if any orchestration events were found this cycle.
+func (g *Guardian) isOrchestratorActive() bool {
+	return len(g.orchestratorEvents) > 0
+}
 
-	events, err := g.docker.ContainerEvents(ctx, since, now, orchestrationOnly)
-	if err != nil {
-		return false
-	}
-
-	for _, e := range events {
+// isContainerInOrchestration checks if this specific container had events this cycle.
+func (g *Guardian) isContainerInOrchestration(containerName string) bool {
+	for _, e := range g.orchestratorEvents {
 		if e.Actor.Attributes["name"] == containerName {
 			return true
 		}
@@ -97,8 +114,18 @@ func (g *Guardian) isBackupManaged(labels map[string]string) bool {
 	return ok
 }
 
-// isBackupRunning returns true if a backup container is currently running.
-func (g *Guardian) isBackupRunning(ctx context.Context) bool {
+// cachedBackupRunning returns true if a backup container is currently running (cached per cycle).
+func (g *Guardian) cachedBackupRunning(ctx context.Context) bool {
+	if g.backupRunning != nil {
+		return *g.backupRunning
+	}
+
+	result := g.checkBackupRunning(ctx)
+	g.backupRunning = &result
+	return result
+}
+
+func (g *Guardian) checkBackupRunning(ctx context.Context) bool {
 	running, err := g.docker.RunningContainers(ctx)
 	if err != nil {
 		return false

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -120,23 +121,22 @@ func Load() *Config {
 	}
 }
 
-// Print logs all non-secret configuration values.
-func (c *Config) Print(log interface{ Info(string, ...any) }) {
-	log.Info("config",
-		"AUTOHEAL_CONTAINER_LABEL", c.ContainerLabel,
-		"AUTOHEAL_START_PERIOD", c.StartPeriod,
-		"AUTOHEAL_INTERVAL", c.Interval,
-		"AUTOHEAL_DEFAULT_STOP_TIMEOUT", c.DefaultStopTimeout,
-		"AUTOHEAL_ONLY_MONITOR_RUNNING", c.OnlyMonitorRunning,
-		"AUTOHEAL_MONITOR_DEPENDENCIES", c.MonitorDependencies,
-		"AUTOHEAL_DEPENDENCY_START_DELAY", c.DependencyStartDelay,
-		"AUTOHEAL_BACKUP_LABEL", c.BackupLabel,
-		"AUTOHEAL_BACKUP_CONTAINER", c.BackupContainer,
-		"AUTOHEAL_GRACE_PERIOD", c.GracePeriod,
-		"AUTOHEAL_WATCHTOWER_COOLDOWN", c.WatchtowerCooldown,
-		"AUTOHEAL_WATCHTOWER_SCOPE", c.WatchtowerScope,
-		"AUTOHEAL_WATCHTOWER_EVENTS", c.WatchtowerEvents,
-	)
+// PrintBanner outputs configuration to stdout in the shell-compatible format
+// that acceptance tests grep for (e.g. "AUTOHEAL_CONTAINER_LABEL=autoheal").
+func (c *Config) PrintBanner() {
+	fmt.Println("AUTOHEAL_CONTAINER_LABEL=" + c.ContainerLabel)
+	fmt.Println("AUTOHEAL_START_PERIOD=" + strconv.Itoa(c.StartPeriod))
+	fmt.Println("AUTOHEAL_INTERVAL=" + strconv.Itoa(c.Interval))
+	fmt.Println("AUTOHEAL_DEFAULT_STOP_TIMEOUT=" + strconv.Itoa(c.DefaultStopTimeout))
+	fmt.Println("AUTOHEAL_ONLY_MONITOR_RUNNING=" + strconv.FormatBool(c.OnlyMonitorRunning))
+	fmt.Println("AUTOHEAL_MONITOR_DEPENDENCIES=" + strconv.FormatBool(c.MonitorDependencies))
+	fmt.Println("AUTOHEAL_DEPENDENCY_START_DELAY=" + strconv.Itoa(c.DependencyStartDelay))
+	fmt.Println("AUTOHEAL_BACKUP_LABEL=" + c.BackupLabel)
+	fmt.Println("AUTOHEAL_BACKUP_CONTAINER=" + c.BackupContainer)
+	fmt.Println("AUTOHEAL_GRACE_PERIOD=" + strconv.Itoa(c.GracePeriod))
+	fmt.Println("AUTOHEAL_WATCHTOWER_COOLDOWN=" + strconv.Itoa(c.WatchtowerCooldown))
+	fmt.Println("AUTOHEAL_WATCHTOWER_SCOPE=" + c.WatchtowerScope)
+	fmt.Println("AUTOHEAL_WATCHTOWER_EVENTS=" + c.WatchtowerEvents)
 }
 
 // ResolvedNotifyEvents returns the normalised event categories.
