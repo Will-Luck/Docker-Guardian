@@ -46,6 +46,50 @@ AUTOHEAL_WATCHTOWER_COOLDOWN=${AUTOHEAL_WATCHTOWER_COOLDOWN:-300}
 AUTOHEAL_WATCHTOWER_SCOPE=${AUTOHEAL_WATCHTOWER_SCOPE:-all}
 AUTOHEAL_WATCHTOWER_EVENTS=${AUTOHEAL_WATCHTOWER_EVENTS:-orchestration}
 
+# Notification events (keywords or numbers, comma-separated)
+NOTIFY_EVENTS=${NOTIFY_EVENTS:-"actions"}
+
+# Notification services
+NOTIFY_GOTIFY_URL=${NOTIFY_GOTIFY_URL:-""}
+NOTIFY_GOTIFY_TOKEN=${NOTIFY_GOTIFY_TOKEN:-""}
+NOTIFY_DISCORD_WEBHOOK=${NOTIFY_DISCORD_WEBHOOK:-""}
+NOTIFY_SLACK_WEBHOOK=${NOTIFY_SLACK_WEBHOOK:-""}
+NOTIFY_TELEGRAM_TOKEN=${NOTIFY_TELEGRAM_TOKEN:-""}
+NOTIFY_TELEGRAM_CHAT_ID=${NOTIFY_TELEGRAM_CHAT_ID:-""}
+NOTIFY_PUSHOVER_TOKEN=${NOTIFY_PUSHOVER_TOKEN:-""}
+NOTIFY_PUSHOVER_USER=${NOTIFY_PUSHOVER_USER:-""}
+NOTIFY_PUSHBULLET_TOKEN=${NOTIFY_PUSHBULLET_TOKEN:-""}
+NOTIFY_LUNASEA_WEBHOOK=${NOTIFY_LUNASEA_WEBHOOK:-""}
+NOTIFY_EMAIL_SMTP=${NOTIFY_EMAIL_SMTP:-""}
+NOTIFY_EMAIL_FROM=${NOTIFY_EMAIL_FROM:-""}
+NOTIFY_EMAIL_TO=${NOTIFY_EMAIL_TO:-""}
+NOTIFY_EMAIL_USER=${NOTIFY_EMAIL_USER:-""}
+NOTIFY_EMAIL_PASS=${NOTIFY_EMAIL_PASS:-""}
+
+# Normalise NOTIFY_EVENTS early so it's available for startup logging
+_normalise_notify_events() {
+  local raw="$1" result=""
+  case "$raw" in
+    all)   echo "startup,actions,skips"; return ;;
+    debug) echo "startup,actions,skips,debug"; return ;;
+  esac
+  local IFS=","
+  for item in $raw; do
+    item=$(echo "$item" | tr -d ' ')
+    case "$item" in
+      1|startup)    result="${result},startup" ;;
+      2|actions)    result="${result},actions" ;;
+      3|failures)   result="${result},failures" ;;
+      4|skips)      result="${result},skips" ;;
+      5|debug)      result="${result},startup,actions,skips,debug" ;;
+      all)          result="${result},startup,actions,skips" ;;
+      *)            echo "WARNING: Unknown NOTIFY_EVENTS value: $item" >&2 ;;
+    esac
+  done
+  echo "${result#,}"
+}
+NOTIFY_EVENTS_RESOLVED=$(_normalise_notify_events "$NOTIFY_EVENTS")
+
 echo "Docker-Guardian (forked from docker-autoheal)"
 echo "============================================="
 echo AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL}
@@ -62,6 +106,25 @@ echo AUTOHEAL_WATCHTOWER_COOLDOWN=${AUTOHEAL_WATCHTOWER_COOLDOWN}
 echo AUTOHEAL_WATCHTOWER_SCOPE=${AUTOHEAL_WATCHTOWER_SCOPE}
 echo AUTOHEAL_WATCHTOWER_EVENTS=${AUTOHEAL_WATCHTOWER_EVENTS}
 
+# Log configured notification services (no tokens)
+CONFIGURED_NOTIFIERS=""
+if [ -n "$WEBHOOK_URL" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} webhook"; fi
+if [ -n "$APPRISE_URL" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} apprise"; fi
+if [ -n "$NOTIFY_GOTIFY_URL" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} gotify"; fi
+if [ -n "$NOTIFY_DISCORD_WEBHOOK" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} discord"; fi
+if [ -n "$NOTIFY_SLACK_WEBHOOK" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} slack"; fi
+if [ -n "$NOTIFY_TELEGRAM_TOKEN" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} telegram"; fi
+if [ -n "$NOTIFY_PUSHOVER_TOKEN" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} pushover"; fi
+if [ -n "$NOTIFY_PUSHBULLET_TOKEN" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} pushbullet"; fi
+if [ -n "$NOTIFY_LUNASEA_WEBHOOK" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} lunasea"; fi
+if [ -n "$NOTIFY_EMAIL_SMTP" ]; then CONFIGURED_NOTIFIERS="${CONFIGURED_NOTIFIERS} email"; fi
+if [ -n "$CONFIGURED_NOTIFIERS" ]; then
+  echo "NOTIFICATIONS=${CONFIGURED_NOTIFIERS}"
+else
+  echo "NOTIFICATIONS=none"
+fi
+echo "NOTIFY_EVENTS=${NOTIFY_EVENTS} (resolved: ${NOTIFY_EVENTS_RESOLVED})"
+
 # ── Docker API helpers ───────────────────────────────────────────────
 
 docker_curl() {
@@ -71,27 +134,96 @@ docker_curl() {
   "$@"
 }
 
-# ── Notification helpers (unchanged from upstream) ───────────────────
+# ── Notification event filtering ─────────────────────────────────────
 
-notify_webhook() {
-  local text="$@"
-
-  if [ -n "$WEBHOOK_URL" ]; then
-    curl -s -X POST -H "Content-type: application/json" \
-      -d "$(generate_webhook_payload "$text")" "$WEBHOOK_URL" &
-  fi
-
-  if [ -n "$APPRISE_URL" ]; then
-    curl -s -X POST -H "Content-type: application/json" \
-      -d "$(generate_apprise_payload "$text")" "$APPRISE_URL" &
-  fi
+# Check if an event category should trigger notifications
+# Categories: startup, action_success, action_failure, skip
+# shellcheck disable=2039
+should_notify() {
+  local category="$1"
+  case "$category" in
+    startup)        echo "$NOTIFY_EVENTS_RESOLVED" | grep -q "startup" && return 0 || return 1 ;;
+    action_success) echo "$NOTIFY_EVENTS_RESOLVED" | grep -q "actions" && return 0 || return 1 ;;
+    action_failure) echo "$NOTIFY_EVENTS_RESOLVED" | grep -qE "actions|failures" && return 0 || return 1 ;;
+    skip)           echo "$NOTIFY_EVENTS_RESOLVED" | grep -q "skips" && return 0 || return 1 ;;
+    *)              return 1 ;;
+  esac
 }
 
-notify_post_restart_script() {
-  if [ -n "$POST_RESTART_SCRIPT" ]; then
-    $POST_RESTART_SCRIPT "$@" &
-  fi
+is_debug_notify() {
+  echo "$NOTIFY_EVENTS_RESOLVED" | grep -q "debug" && return 0 || return 1
 }
+
+# ── Notification services ────────────────────────────────────────────
+
+send_to_gotify() {
+  local text="$1"
+  if [ -z "$NOTIFY_GOTIFY_URL" ] || [ -z "$NOTIFY_GOTIFY_TOKEN" ]; then return; fi
+  curl -s -X POST "${NOTIFY_GOTIFY_URL}/message?token=${NOTIFY_GOTIFY_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\":\"Docker-Guardian\",\"message\":\"${text}\",\"priority\":5}" &
+}
+
+send_to_discord() {
+  local text="$1"
+  if [ -z "$NOTIFY_DISCORD_WEBHOOK" ]; then return; fi
+  curl -s -X POST "$NOTIFY_DISCORD_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d "{\"embeds\":[{\"title\":\"Docker-Guardian\",\"description\":\"${text}\",\"color\":3066993}]}" &
+}
+
+send_to_slack() {
+  local text="$1"
+  if [ -z "$NOTIFY_SLACK_WEBHOOK" ]; then return; fi
+  curl -s -X POST "$NOTIFY_SLACK_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d "{\"text\":\"*Docker-Guardian*\n${text}\"}" &
+}
+
+send_to_telegram() {
+  local text="$1"
+  if [ -z "$NOTIFY_TELEGRAM_TOKEN" ] || [ -z "$NOTIFY_TELEGRAM_CHAT_ID" ]; then return; fi
+  curl -s -X POST "https://api.telegram.org/bot${NOTIFY_TELEGRAM_TOKEN}/sendMessage" \
+    -H "Content-Type: application/json" \
+    -d "{\"chat_id\":\"${NOTIFY_TELEGRAM_CHAT_ID}\",\"text\":\"Docker-Guardian: ${text}\"}" &
+}
+
+send_to_pushover() {
+  local text="$1"
+  if [ -z "$NOTIFY_PUSHOVER_TOKEN" ] || [ -z "$NOTIFY_PUSHOVER_USER" ]; then return; fi
+  curl -s -X POST "https://api.pushover.net/1/messages.json" \
+    -d "token=${NOTIFY_PUSHOVER_TOKEN}&user=${NOTIFY_PUSHOVER_USER}&title=Docker-Guardian&message=${text}" &
+}
+
+send_to_pushbullet() {
+  local text="$1"
+  if [ -z "$NOTIFY_PUSHBULLET_TOKEN" ]; then return; fi
+  curl -s -X POST "https://api.pushbullet.com/v2/pushes" \
+    -H "Access-Token: ${NOTIFY_PUSHBULLET_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"type\":\"note\",\"title\":\"Docker-Guardian\",\"body\":\"${text}\"}" &
+}
+
+send_to_lunasea() {
+  local text="$1"
+  if [ -z "$NOTIFY_LUNASEA_WEBHOOK" ]; then return; fi
+  curl -s -X POST "$NOTIFY_LUNASEA_WEBHOOK" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\":\"Docker-Guardian\",\"body\":\"${text}\"}" &
+}
+
+send_to_email() {
+  local text="$1"
+  if [ -z "$NOTIFY_EMAIL_SMTP" ] || [ -z "$NOTIFY_EMAIL_TO" ]; then return; fi
+  local subject="Docker-Guardian Alert"
+  printf "From: %s\nTo: %s\nSubject: %s\n\n%s" \
+    "$NOTIFY_EMAIL_FROM" "$NOTIFY_EMAIL_TO" "$subject" "$text" | \
+    curl -s --url "smtp://${NOTIFY_EMAIL_SMTP}" --ssl-reqd \
+      --mail-from "$NOTIFY_EMAIL_FROM" --mail-rcpt "$NOTIFY_EMAIL_TO" \
+      --user "${NOTIFY_EMAIL_USER}:${NOTIFY_EMAIL_PASS}" -T - &
+}
+
+# ── Notification dispatcher ──────────────────────────────────────────
 
 generate_webhook_payload() {
   local text="$@"
@@ -105,6 +237,75 @@ generate_apprise_payload() {
   cat <<EOF
 {"title":"Docker-Guardian","body":"$text"}
 EOF
+}
+
+# Internal dispatch — sends to all configured services
+_dispatch_notification() {
+  local text="$1"
+
+  if is_debug_notify; then
+    local DATE
+    DATE=$(date +%Y-%m-%dT%H:%M:%S%z)
+    [ -n "$WEBHOOK_URL" ] && echo "$DATE [notify] → webhook: $text"
+    [ -n "$APPRISE_URL" ] && echo "$DATE [notify] → apprise: $text"
+    [ -n "$NOTIFY_GOTIFY_URL" ] && echo "$DATE [notify] → gotify: $text"
+    [ -n "$NOTIFY_DISCORD_WEBHOOK" ] && echo "$DATE [notify] → discord: $text"
+    [ -n "$NOTIFY_SLACK_WEBHOOK" ] && echo "$DATE [notify] → slack: $text"
+    [ -n "$NOTIFY_TELEGRAM_TOKEN" ] && echo "$DATE [notify] → telegram: $text"
+    [ -n "$NOTIFY_PUSHOVER_TOKEN" ] && echo "$DATE [notify] → pushover: $text"
+    [ -n "$NOTIFY_PUSHBULLET_TOKEN" ] && echo "$DATE [notify] → pushbullet: $text"
+    [ -n "$NOTIFY_LUNASEA_WEBHOOK" ] && echo "$DATE [notify] → lunasea: $text"
+    [ -n "$NOTIFY_EMAIL_SMTP" ] && echo "$DATE [notify] → email: $text"
+  fi
+
+  # Existing services (backward compatible)
+  if [ -n "$WEBHOOK_URL" ]; then
+    curl -s -X POST -H "Content-type: application/json" \
+      -d "$(generate_webhook_payload "$text")" "$WEBHOOK_URL" &
+  fi
+  if [ -n "$APPRISE_URL" ]; then
+    curl -s -X POST -H "Content-type: application/json" \
+      -d "$(generate_apprise_payload "$text")" "$APPRISE_URL" &
+  fi
+
+  # Native notification services
+  send_to_gotify "$text"
+  send_to_discord "$text"
+  send_to_slack "$text"
+  send_to_telegram "$text"
+  send_to_pushover "$text"
+  send_to_pushbullet "$text"
+  send_to_lunasea "$text"
+  send_to_email "$text"
+}
+
+notify_webhook() {
+  local text="$@"
+  # Determine if success or failure from the text content
+  if echo "$text" | grep -q "Failed"; then
+    should_notify action_failure || return 0
+  else
+    should_notify action_success || return 0
+  fi
+  _dispatch_notification "$text"
+}
+
+notify_skip() {
+  local text="$@"
+  should_notify skip || return 0
+  _dispatch_notification "$text"
+}
+
+notify_startup() {
+  local text="$@"
+  should_notify startup || return 0
+  _dispatch_notification "$text"
+}
+
+notify_post_restart_script() {
+  if [ -n "$POST_RESTART_SCRIPT" ]; then
+    $POST_RESTART_SCRIPT "$@" &
+  fi
 }
 
 # ── Guard functions (shared by unhealthy + dependency checks) ────────
@@ -270,12 +471,14 @@ should_skip_container() {
     if [ "$AUTOHEAL_WATCHTOWER_SCOPE" = "affected" ]; then
       if is_container_in_orchestration "$container_name"; then
         echo "$date_str Container $container_name (${container_id:0:12}) affected by orchestration activity within ${AUTOHEAL_WATCHTOWER_COOLDOWN}s - skipping"
+        notify_skip "Container ${container_name#/} (${container_id:0:12}) skipped - orchestration activity"
         return 0
       fi
     else
       # Default (all): skip ALL containers when any orchestration detected
       if is_orchestrator_active; then
         echo "$date_str Container $container_name (${container_id:0:12}) skipped - orchestration activity detected within ${AUTOHEAL_WATCHTOWER_COOLDOWN}s"
+        notify_skip "Container ${container_name#/} (${container_id:0:12}) skipped - orchestration activity"
         return 0
       fi
     fi
@@ -284,12 +487,14 @@ should_skip_container() {
   # Check grace period (fallback)
   if is_within_grace_period "$container_id"; then
     echo "$date_str Container $container_name (${container_id:0:12}) stopped within grace period (${AUTOHEAL_GRACE_PERIOD}s) - skipping"
+    notify_skip "Container ${container_name#/} (${container_id:0:12}) skipped - grace period"
     return 0
   fi
 
   # Check backup awareness
   if is_backup_managed "$labels_json" && is_backup_running; then
     echo "$date_str Container $container_name (${container_id:0:12}) managed by backup (currently running) - skipping"
+    notify_skip "Container ${container_name#/} (${container_id:0:12}) skipped - backup running"
     return 0
   fi
 
@@ -481,6 +686,9 @@ if [ "$1" = "autoheal" ]; then
     sleep "$AUTOHEAL_START_PERIOD" &
     wait $!
   fi
+
+  # Send startup notification if enabled
+  notify_startup "Docker-Guardian started. Monitoring active. Services:${CONFIGURED_NOTIFIERS:- none}"
 
   _CURRENT_CYCLE=0
 

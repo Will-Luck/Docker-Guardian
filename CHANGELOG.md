@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0] - 2026-02-08
+
+### Added
+- **Native multi-service notifications**: Gotify, Discord, Slack, Telegram, Pushover, Pushbullet, LunaSea, and Email — all via pure `curl`, no extra dependencies
+- `NOTIFY_EVENTS` env var — controls which events trigger notifications: `startup`, `actions`, `failures`, `skips`, `debug`, or numbered (`1`-`5`)
+- Event filtering: `notify_webhook()` checks event category before dispatching, `notify_skip()` for skip events, `notify_startup()` for boot confirmation
+- Debug mode (`NOTIFY_EVENTS=debug`): logs every dispatch with `[notify] → service: message` to console
+- Startup notification: sends boot confirmation when `startup` event is enabled
+- Skip notifications: sends notifications for orchestration, grace period, and backup skip events when `skips` event is enabled
+- Test suite: `test-notifications.sh`
+
+### Changed
+- `notify_webhook()` refactored into dispatcher pattern: event filtering → `_dispatch_notification()` → per-service `send_to_*()` functions
+- Existing `WEBHOOK_URL` and `APPRISE_URL` still work (backward compatible, routed through new dispatcher)
+
 ## [1.1.0] - 2026-02-08
 
 ### Added

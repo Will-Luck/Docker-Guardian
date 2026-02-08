@@ -82,6 +82,61 @@ Skips recently-stopped containers to avoid fighting with:
 
 Default: 300 seconds. Set to `0` to disable.
 
+## Notifications
+
+Docker-Guardian supports 9 notification services natively — just set the env vars for your service(s). All implemented as pure `curl` calls, no extra dependencies or sidecar containers needed. Multiple services can be active simultaneously.
+
+```bash
+docker run -d \
+  --name docker-guardian \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e NOTIFY_GOTIFY_URL=http://gotify:8080 \
+  -e NOTIFY_GOTIFY_TOKEN=Axxxxxxxxx \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  docker-guardian
+```
+
+### Notification Services
+
+| Service | Env Vars | Notes |
+|---|---|---|
+| **Gotify** | `NOTIFY_GOTIFY_URL`, `NOTIFY_GOTIFY_TOKEN` | POST to `{url}/message?token={token}` |
+| **Discord** | `NOTIFY_DISCORD_WEBHOOK` | Full webhook URL from Discord settings |
+| **Slack** | `NOTIFY_SLACK_WEBHOOK` | Full webhook URL from Slack app config |
+| **Telegram** | `NOTIFY_TELEGRAM_TOKEN`, `NOTIFY_TELEGRAM_CHAT_ID` | Bot token from @BotFather |
+| **Pushover** | `NOTIFY_PUSHOVER_TOKEN`, `NOTIFY_PUSHOVER_USER` | App token + user key |
+| **Pushbullet** | `NOTIFY_PUSHBULLET_TOKEN` | Access token from account settings |
+| **LunaSea** | `NOTIFY_LUNASEA_WEBHOOK` | Custom webhook URL |
+| **Email** | `NOTIFY_EMAIL_SMTP`, `NOTIFY_EMAIL_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_USER`, `NOTIFY_EMAIL_PASS` | Uses curl SMTP. Format: `host:port` |
+| **Webhook** | `WEBHOOK_URL`, `WEBHOOK_JSON_KEY` | Generic webhook (legacy) |
+
+`APPRISE_URL` also still works for Apprise users.
+
+### Notification Events (`NOTIFY_EVENTS`)
+
+Controls which events trigger notifications. Accepts keywords or numbers, comma-separated. Default: `actions`.
+
+| # | Keyword | Events | Default |
+|---|---|---|---|
+| 1 | `startup` | Guardian boot confirmation (test notification) | No |
+| 2 | `actions` | Restart success/failure + orphan start success/failure | **Yes** |
+| 3 | `failures` | Only failure events (restart failed, start failed) | No |
+| 4 | `skips` | Orchestration skip, backup skip, grace period skip | No |
+| 5 | `debug` | All of the above + logs every notification dispatch to console | No |
+
+**Examples:**
+
+```bash
+-e NOTIFY_EVENTS=actions            # default — success + failure
+-e NOTIFY_EVENTS=actions,startup    # actions + boot test
+-e NOTIFY_EVENTS=2,1               # same as above, numbered
+-e NOTIFY_EVENTS=failures           # only failures
+-e NOTIFY_EVENTS=all                # everything except debug (1-4)
+-e NOTIFY_EVENTS=debug              # everything + console logging (5)
+```
+
+`failures` (3) is a subset of `actions` (2). If both are set, `actions` takes precedence.
+
 ## Configuration
 
 All configuration via environment variables, matching the upstream autoheal pattern:
@@ -110,7 +165,8 @@ All configuration via environment variables, matching the upstream autoheal patt
 | `AUTOHEAL_ONLY_MONITOR_RUNNING` | `false` | Only monitor running containers for health |
 | `DOCKER_SOCK` | `/var/run/docker.sock` | Docker socket path or `tcp://host:port` |
 | `CURL_TIMEOUT` | `30` | API request timeout |
-| `WEBHOOK_URL` | _(empty)_ | Webhook URL for notifications |
+| `NOTIFY_EVENTS` | `actions` | Notification event filter (see Notification Events above) |
+| `WEBHOOK_URL` | _(empty)_ | Generic webhook URL for notifications |
 | `WEBHOOK_JSON_KEY` | `content` | JSON key for webhook payload |
 | `APPRISE_URL` | _(empty)_ | Apprise notification URL |
 | `POST_RESTART_SCRIPT` | _(empty)_ | Script to run after container restart/start |
@@ -148,10 +204,11 @@ cd tests && ./test-all.sh
 Individual tests:
 
 ```bash
-./tests/test-dependency.sh   # Dependency orphan recovery
-./tests/test-backup.sh       # Backup awareness
-./tests/test-grace.sh        # Grace period behaviour
-./tests/test-watchtower.sh   # Watchtower/orchestration awareness
+./tests/test-dependency.sh      # Dependency orphan recovery
+./tests/test-backup.sh          # Backup awareness
+./tests/test-grace.sh           # Grace period behaviour
+./tests/test-watchtower.sh      # Watchtower/orchestration awareness
+./tests/test-notifications.sh   # Notification services and event filtering
 ```
 
 ## Building
@@ -174,7 +231,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t docker-guardian .
 | Backup awareness | No | Yes |
 | Grace period | No | Yes |
 | Alpine version | 3.18 | 3.20 |
-| Webhook notifications | Yes | Yes (extended to new features) |
+| Webhook notifications | Yes | Yes (+ 8 native services, event filtering) |
 
 ## Licence
 
