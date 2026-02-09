@@ -1,6 +1,8 @@
 # Docker-Guardian
 
-Dependency-aware container recovery for Docker. Forked from [willfarrell/docker-autoheal](https://github.com/willfarrell/docker-autoheal) (MIT).
+Dependency-aware container recovery for Docker. Rewritten in Go from [willfarrell/docker-autoheal](https://github.com/willfarrell/docker-autoheal) (MIT).
+
+Static Go binary on Alpine. Multi-arch (`amd64`/`arm64`). No runtime dependencies.
 
 ## Quick Start
 
