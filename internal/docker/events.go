@@ -19,7 +19,7 @@ func (c *Client) ContainerEvents(ctx context.Context, since time.Time, until tim
 		Filters: make(client.Filters).Add("type", "container"),
 	}
 	if orchestrationOnly {
-		opts.Filters = opts.Filters.Add("action", "destroy", "create")
+		opts.Filters = opts.Filters.Add("event", "destroy", "create")
 	}
 
 	result := c.api.Events(ctx, opts)
