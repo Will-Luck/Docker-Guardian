@@ -126,7 +126,6 @@ func (g *Guardian) isBackupManaged(labels map[string]string) bool {
 	return ok
 }
 
-
 // runPostRestartScript executes the POST_RESTART_SCRIPT if configured.
 func (g *Guardian) runPostRestartScript(containerName, shortID, state string, timeout int) {
 	if g.cfg.PostRestartScript == "" {

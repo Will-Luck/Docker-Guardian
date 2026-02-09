@@ -28,7 +28,7 @@ type Config struct {
 	DependencyStartDelay int // seconds
 	BackupLabel          string
 	BackupContainer      string
-	BackupTimeout        int // seconds (0 = disabled)
+	BackupTimeout        int    // seconds (0 = disabled)
 	GracePeriod          int    // seconds
 	WatchtowerCooldown   int    // seconds
 	WatchtowerScope      string // "all" or "affected"
