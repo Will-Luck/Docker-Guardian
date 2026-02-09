@@ -35,7 +35,6 @@ type Guardian struct {
 	// Per-cycle caches (used during full scans)
 	orchestratorEvents []events.Message
 	orchestratorCached bool
-	backupRunning      *bool
 	cycle              int
 }
 
@@ -115,7 +114,6 @@ func (g *Guardian) runPolling(ctx context.Context) error {
 	for {
 		g.cycle++
 		g.orchestratorCached = false
-		g.backupRunning = nil
 
 		g.checkUnhealthy(ctx)
 		g.checkDependencyOrphans(ctx)
@@ -133,7 +131,6 @@ func (g *Guardian) runPolling(ctx context.Context) error {
 func (g *Guardian) fullScan(ctx context.Context) {
 	g.cycle++
 	g.orchestratorCached = false
-	g.backupRunning = nil
 
 	g.checkUnhealthy(ctx)
 	g.checkDependencyOrphans(ctx)
@@ -189,14 +186,12 @@ func (g *Guardian) debounce(ctx context.Context, key string, fn func()) {
 // checkContainerByID inspects and potentially restarts a single container.
 func (g *Guardian) checkContainerByID(ctx context.Context, containerID string) {
 	// Use the regular unhealthy check — it re-queries and filters
-	g.backupRunning = nil
 	g.orchestratorCached = false
 	g.checkUnhealthy(ctx)
 }
 
 // checkOrphanedDependents checks if any dependents of the given container need starting.
 func (g *Guardian) checkOrphanedDependents(ctx context.Context, _ string) {
-	g.backupRunning = nil
 	g.orchestratorCached = false
 	g.checkDependencyOrphans(ctx)
 }

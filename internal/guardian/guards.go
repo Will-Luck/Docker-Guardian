@@ -57,14 +57,20 @@ func (g *Guardian) shouldSkip(ctx context.Context, containerID, containerName st
 		}
 	}
 
-	// Backup awareness
-	if g.isBackupManaged(labels) && g.cachedBackupRunning(ctx) {
-		now := g.clock.Now().Format("02-01-2006 15:04:05")
-		fmt.Printf("%s Container %s (%s) managed by backup (currently running) - skipping\n",
-			now, cleanName, shortID)
-		g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - backup running", cleanName, shortID))
-		metrics.SkipsTotal.WithLabelValues(cleanName, "backup").Inc()
-		return true
+	// Backup awareness — skip containers stopped within backup timeout
+	if g.isBackupManaged(labels) && g.cfg.BackupTimeout > 0 {
+		finishedAt, err := g.docker.ContainerFinishedAt(ctx, containerID)
+		if err == nil {
+			age := g.clock.Since(finishedAt)
+			if age < time.Duration(g.cfg.BackupTimeout)*time.Second {
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
+				fmt.Printf("%s Container %s (%s) managed by backup (stopped %s ago, timeout %ds) - skipping\n",
+					now, cleanName, shortID, age.Round(time.Second), g.cfg.BackupTimeout)
+				g.notifier.Skip(fmt.Sprintf("Container %s (%s) skipped - backup timeout", cleanName, shortID))
+				metrics.SkipsTotal.WithLabelValues(cleanName, "backup").Inc()
+				return true
+			}
+		}
 	}
 
 	return false
@@ -120,38 +126,6 @@ func (g *Guardian) isBackupManaged(labels map[string]string) bool {
 	return ok
 }
 
-// cachedBackupRunning returns true if a backup container is currently running (cached per cycle).
-func (g *Guardian) cachedBackupRunning(ctx context.Context) bool {
-	if g.backupRunning != nil {
-		return *g.backupRunning
-	}
-
-	result := g.checkBackupRunning(ctx)
-	g.backupRunning = &result
-	return result
-}
-
-func (g *Guardian) checkBackupRunning(ctx context.Context) bool {
-	running, err := g.docker.RunningContainers(ctx)
-	if err != nil {
-		return false
-	}
-
-	for _, c := range running {
-		if g.cfg.BackupContainer != "" {
-			for _, name := range c.Names {
-				if strings.Contains(name, g.cfg.BackupContainer) {
-					return true
-				}
-			}
-		} else {
-			if strings.Contains(c.Image, "docker-volume-backup") {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // runPostRestartScript executes the POST_RESTART_SCRIPT if configured.
 func (g *Guardian) runPostRestartScript(containerName, shortID, state string, timeout int) {

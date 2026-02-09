@@ -7,7 +7,6 @@ import (
 
 	"github.com/Will-Luck/Docker-Guardian/internal/config"
 	"github.com/Will-Luck/Docker-Guardian/internal/logging"
-	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
 )
 
@@ -136,21 +135,21 @@ func TestShouldSkip_OrchestrationAffected(t *testing.T) {
 	}
 }
 
-func TestShouldSkip_BackupRunning(t *testing.T) {
+func TestShouldSkip_BackupWithinTimeout(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	clk := newMockClock(now)
+
 	cfg := &config.Config{
 		WatchtowerCooldown: 0,
 		GracePeriod:        0,
 		BackupLabel:        "docker-volume-backup.stop-during-backup",
-		BackupContainer:    "my-backup",
+		BackupTimeout:      600,
 	}
 	dock := newMockDocker()
 	notif := &mockNotifier{}
-	clk := newMockClock(time.Now())
 
-	// Backup container running
-	dock.runningContainers = []container.Summary{
-		{Names: []string{"/my-backup"}},
-	}
+	// Container stopped 5 minutes ago — within 600s backup timeout
+	dock.finishedAtResults["abcdef123456"] = now.Add(-5 * time.Minute)
 
 	labels := map[string]string{
 		"docker-volume-backup.stop-during-backup": "true",
@@ -158,23 +157,25 @@ func TestShouldSkip_BackupRunning(t *testing.T) {
 
 	g := newTestGuardian(cfg, dock, notif, clk)
 	if !g.shouldSkip(context.Background(), "abcdef123456", "test-container", labels) {
-		t.Error("should skip backup-managed container while backup is running")
+		t.Error("should skip backup-managed container stopped within backup timeout")
 	}
 }
 
-func TestShouldSkip_BackupNotRunning(t *testing.T) {
+func TestShouldSkip_BackupTimeoutExpired(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	clk := newMockClock(now)
+
 	cfg := &config.Config{
 		WatchtowerCooldown: 0,
 		GracePeriod:        0,
 		BackupLabel:        "docker-volume-backup.stop-during-backup",
-		BackupContainer:    "my-backup",
+		BackupTimeout:      600,
 	}
 	dock := newMockDocker()
 	notif := &mockNotifier{}
-	clk := newMockClock(time.Now())
 
-	// No backup container running
-	dock.runningContainers = []container.Summary{}
+	// Container stopped 15 minutes ago — beyond 600s backup timeout
+	dock.finishedAtResults["abcdef123456"] = now.Add(-15 * time.Minute)
 
 	labels := map[string]string{
 		"docker-volume-backup.stop-during-backup": "true",
@@ -182,6 +183,6 @@ func TestShouldSkip_BackupNotRunning(t *testing.T) {
 
 	g := newTestGuardian(cfg, dock, notif, clk)
 	if g.shouldSkip(context.Background(), "abcdef123456", "test-container", labels) {
-		t.Error("should not skip when backup is not running")
+		t.Error("should not skip when backup timeout has expired")
 	}
 }

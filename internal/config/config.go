@@ -28,6 +28,7 @@ type Config struct {
 	DependencyStartDelay int // seconds
 	BackupLabel          string
 	BackupContainer      string
+	BackupTimeout        int // seconds (0 = disabled)
 	GracePeriod          int    // seconds
 	WatchtowerCooldown   int    // seconds
 	WatchtowerScope      string // "all" or "affected"
@@ -101,6 +102,7 @@ func Load() *Config {
 		DependencyStartDelay: envInt("AUTOHEAL_DEPENDENCY_START_DELAY", 5),
 		BackupLabel:          envStr("AUTOHEAL_BACKUP_LABEL", "docker-volume-backup.stop-during-backup"),
 		BackupContainer:      envStr("AUTOHEAL_BACKUP_CONTAINER", ""),
+		BackupTimeout:        envInt("AUTOHEAL_BACKUP_TIMEOUT", 600),
 		GracePeriod:          envInt("AUTOHEAL_GRACE_PERIOD", 300),
 		WatchtowerCooldown:   envInt("AUTOHEAL_WATCHTOWER_COOLDOWN", 300),
 		WatchtowerScope:      envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
@@ -162,6 +164,7 @@ func (c *Config) PrintBanner() {
 	fmt.Println("AUTOHEAL_DEPENDENCY_START_DELAY=" + strconv.Itoa(c.DependencyStartDelay))
 	fmt.Println("AUTOHEAL_BACKUP_LABEL=" + c.BackupLabel)
 	fmt.Println("AUTOHEAL_BACKUP_CONTAINER=" + c.BackupContainer)
+	fmt.Println("AUTOHEAL_BACKUP_TIMEOUT=" + strconv.Itoa(c.BackupTimeout))
 	fmt.Println("AUTOHEAL_GRACE_PERIOD=" + strconv.Itoa(c.GracePeriod))
 	fmt.Println("AUTOHEAL_WATCHTOWER_COOLDOWN=" + strconv.Itoa(c.WatchtowerCooldown))
 	fmt.Println("AUTOHEAL_WATCHTOWER_SCOPE=" + c.WatchtowerScope)
