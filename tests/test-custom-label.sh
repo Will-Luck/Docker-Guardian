@@ -121,13 +121,17 @@ fi
 echo ""
 echo "--- Test 3: Guardian logs show label filter ---"
 
-if docker logs dg-test-guardian-label 2>&1 | grep -q "AUTOHEAL_CONTAINER_LABEL=my-monitor"; then
+# Capture logs to variable to avoid pipefail+SIGPIPE: grep -q exits early on
+# match, but docker logs may still be writing → SIGPIPE → exit 141 → pipefail
+# reports failure even though grep found the match.
+LABEL_LOGS=$(docker logs dg-test-guardian-label 2>&1 || true)
+if grep -q "AUTOHEAL_CONTAINER_LABEL=my-monitor" <<< "$LABEL_LOGS"; then
   echo "PASS: Guardian logs confirm custom label filter"
   PASS=$((PASS + 1))
 else
   echo "FAIL: Guardian logs do not show custom label"
   FAIL=$((FAIL + 1))
-  docker logs dg-test-guardian-label 2>&1 | head -10
+  head -10 <<< "$LABEL_LOGS"
 fi
 
 echo ""
