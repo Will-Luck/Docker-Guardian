@@ -171,3 +171,37 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          for pair in linux/amd64 linux/arm64 linux/arm/v7 darwin/amd64 darwin/arm64; do
+            OS="${pair%%/*}"
+            ARCH_RAW="${pair#*/}"
+            ARCH="${ARCH_RAW//\//-}"
+            GOARM=""
+            if [[ "$ARCH_RAW" == arm/v* ]]; then
+              GOARM="${ARCH_RAW##*v}"
+              export GOARM
+            fi
+            GOOS="$OS" GOARCH="${ARCH_RAW%%/*}" CGO_ENABLED=0 go build -ldflags="-s -w" -o "dist/docker-guardian-${OS}-${ARCH}" ./cmd/guardian
+          done
+
+      - name: Create release
+        run: gh release create ${{ github.ref_name }} dist/* --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

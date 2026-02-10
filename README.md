@@ -1,5 +1,10 @@
 # Docker-Guardian
 
+[![CI](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/build.yml/badge.svg)](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/build.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Will-Luck/Docker-Guardian)](https://github.com/Will-Luck/Docker-Guardian/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Will-Luck/Docker-Guardian/total)](https://github.com/Will-Luck/Docker-Guardian/releases)
+[![GHCR](https://img.shields.io/badge/ghcr.io-docker--guardian-blue?logo=github)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
+
 Dependency-aware container recovery for Docker. Rewritten in Go from [willfarrell/docker-autoheal](https://github.com/willfarrell/docker-autoheal) (MIT).
 
 Static Go binary on Alpine. Multi-arch (`amd64`/`arm64`). No runtime dependencies.
