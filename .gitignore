@@ -5,3 +5,7 @@
 
 # Go build output
 /guardian
+
+# Internal CI / dev files
+.gitea/
+CLAUDE.md
