@@ -26,13 +26,20 @@ type Config struct {
 	// Docker-Guardian extensions
 	MonitorDependencies  bool
 	DependencyStartDelay int // seconds
-	BackupLabel          string
-	BackupContainer      string
-	BackupTimeout        int    // seconds (0 = disabled)
-	GracePeriod          int    // seconds
-	WatchtowerCooldown   int    // seconds
-	WatchtowerScope      string // "all" or "affected"
-	WatchtowerEvents     string // "orchestration" or "all"
+
+	// Cascade restart (network namespace dependents)
+	CascadeRestart           bool
+	CascadeSettleDelay       int // seconds to wait after parent starts before cascading
+	NetworkHealthcheck       bool
+	NetworkHealthcheckTarget string // IP to ping for health checks
+
+	BackupLabel        string
+	BackupContainer    string
+	BackupTimeout      int    // seconds (0 = disabled)
+	GracePeriod        int    // seconds
+	WatchtowerCooldown int    // seconds
+	WatchtowerScope    string // "all" or "affected"
+	WatchtowerEvents   string // "orchestration" or "all"
 
 	// Unhealthy threshold
 	UnhealthyThreshold int // consecutive unhealthy checks before action (1 = immediate)
@@ -100,13 +107,19 @@ func Load() *Config {
 
 		MonitorDependencies:  envBool("AUTOHEAL_MONITOR_DEPENDENCIES", true),
 		DependencyStartDelay: envInt("AUTOHEAL_DEPENDENCY_START_DELAY", 5),
-		BackupLabel:          envStr("AUTOHEAL_BACKUP_LABEL", "docker-volume-backup.stop-during-backup"),
-		BackupContainer:      envStr("AUTOHEAL_BACKUP_CONTAINER", ""),
-		BackupTimeout:        envInt("AUTOHEAL_BACKUP_TIMEOUT", 600),
-		GracePeriod:          envInt("AUTOHEAL_GRACE_PERIOD", 300),
-		WatchtowerCooldown:   envInt("AUTOHEAL_WATCHTOWER_COOLDOWN", 300),
-		WatchtowerScope:      envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
-		WatchtowerEvents:     envStr("AUTOHEAL_WATCHTOWER_EVENTS", "orchestration"),
+
+		CascadeRestart:           envBool("AUTOHEAL_CASCADE_RESTART", true),
+		CascadeSettleDelay:       envInt("AUTOHEAL_CASCADE_SETTLE_DELAY", 15),
+		NetworkHealthcheck:       envBool("AUTOHEAL_NETWORK_HEALTHCHECK", true),
+		NetworkHealthcheckTarget: envStr("AUTOHEAL_NETWORK_HEALTHCHECK_TARGET", "8.8.8.8"),
+
+		BackupLabel:        envStr("AUTOHEAL_BACKUP_LABEL", "docker-volume-backup.stop-during-backup"),
+		BackupContainer:    envStr("AUTOHEAL_BACKUP_CONTAINER", ""),
+		BackupTimeout:      envInt("AUTOHEAL_BACKUP_TIMEOUT", 600),
+		GracePeriod:        envInt("AUTOHEAL_GRACE_PERIOD", 300),
+		WatchtowerCooldown: envInt("AUTOHEAL_WATCHTOWER_COOLDOWN", 300),
+		WatchtowerScope:    envStr("AUTOHEAL_WATCHTOWER_SCOPE", "all"),
+		WatchtowerEvents:   envStr("AUTOHEAL_WATCHTOWER_EVENTS", "orchestration"),
 
 		UnhealthyThreshold: envInt("AUTOHEAL_UNHEALTHY_THRESHOLD", 1),
 

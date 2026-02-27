@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestResolvedNotifyEvents(t *testing.T) {
@@ -35,6 +37,26 @@ func TestResolvedNotifyEvents(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCascadeRestartDefaults(t *testing.T) {
+	cfg := Load()
+	assert.True(t, cfg.CascadeRestart)
+	assert.Equal(t, 15, cfg.CascadeSettleDelay)
+	assert.True(t, cfg.NetworkHealthcheck)
+	assert.Equal(t, "8.8.8.8", cfg.NetworkHealthcheckTarget)
+}
+
+func TestCascadeRestartFromEnv(t *testing.T) {
+	t.Setenv("AUTOHEAL_CASCADE_RESTART", "false")
+	t.Setenv("AUTOHEAL_CASCADE_SETTLE_DELAY", "30")
+	t.Setenv("AUTOHEAL_NETWORK_HEALTHCHECK", "false")
+	t.Setenv("AUTOHEAL_NETWORK_HEALTHCHECK_TARGET", "1.1.1.1")
+	cfg := Load()
+	assert.False(t, cfg.CascadeRestart)
+	assert.Equal(t, 30, cfg.CascadeSettleDelay)
+	assert.False(t, cfg.NetworkHealthcheck)
+	assert.Equal(t, "1.1.1.1", cfg.NetworkHealthcheckTarget)
 }
 
 func TestEnvStr(t *testing.T) {
