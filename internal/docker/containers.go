@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -118,4 +119,42 @@ func (c *Client) ContainerFinishedAt(ctx context.Context, id string) (time.Time,
 		return time.Time{}, err
 	}
 	return t, nil
+}
+
+// DependentsOf returns all running containers whose NetworkMode is
+// "container:<parentID>" or "container:<parentName>".
+func (c *Client) DependentsOf(ctx context.Context, parentID string) ([]container.Summary, error) {
+	return dependentsOf(ctx, c, parentID)
+}
+
+// dependentsOf contains the core logic for DependentsOf, accepting an API
+// interface so it can be tested with mocks.
+func dependentsOf(ctx context.Context, api API, parentID string) ([]container.Summary, error) {
+	running, err := api.RunningContainers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing running containers: %w", err)
+	}
+
+	// Resolve parent name for matching (NetworkMode can use either ID or name).
+	info, err := api.InspectContainer(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting parent %s: %w", parentID, err)
+	}
+	parentName := strings.TrimPrefix(info.Name, "/")
+
+	var deps []container.Summary
+	for _, c2 := range running {
+		if c2.ID == parentID {
+			continue
+		}
+		inspect, err := api.InspectContainer(ctx, c2.ID)
+		if err != nil {
+			continue // container may have disappeared
+		}
+		mode := string(inspect.HostConfig.NetworkMode)
+		if mode == "container:"+parentID || mode == "container:"+parentName {
+			deps = append(deps, c2)
+		}
+	}
+	return deps, nil
 }

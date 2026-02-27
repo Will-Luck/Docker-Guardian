@@ -43,23 +43,28 @@ type mockDocker struct {
 	healthLogResults map[string]string
 	healthLogErr     map[string]error
 
+	dependentsOfResults map[string][]container.Summary
+	dependentsOfErr     map[string]error
+
 	containerEvents    []events.Message
 	containerEventsErr error
 }
 
 func newMockDocker() *mockDocker {
 	return &mockDocker{
-		inspectResults:    make(map[string]container.InspectResponse),
-		inspectErr:        make(map[string]error),
-		restartErr:        make(map[string]error),
-		startErr:          make(map[string]error),
-		stopErr:           make(map[string]error),
-		statusResults:     make(map[string]string),
-		statusErr:         make(map[string]error),
-		finishedAtResults: make(map[string]time.Time),
-		finishedAtErr:     make(map[string]error),
-		healthLogResults:  make(map[string]string),
-		healthLogErr:      make(map[string]error),
+		inspectResults:      make(map[string]container.InspectResponse),
+		inspectErr:          make(map[string]error),
+		restartErr:          make(map[string]error),
+		startErr:            make(map[string]error),
+		stopErr:             make(map[string]error),
+		statusResults:       make(map[string]string),
+		statusErr:           make(map[string]error),
+		finishedAtResults:   make(map[string]time.Time),
+		finishedAtErr:       make(map[string]error),
+		healthLogResults:    make(map[string]string),
+		healthLogErr:        make(map[string]error),
+		dependentsOfResults: make(map[string][]container.Summary),
+		dependentsOfErr:     make(map[string]error),
 	}
 }
 
@@ -131,6 +136,13 @@ func (m *mockDocker) ContainerHealthLog(_ context.Context, id string) (string, e
 		return "", err
 	}
 	return m.healthLogResults[id], nil
+}
+
+func (m *mockDocker) DependentsOf(_ context.Context, parentID string) ([]container.Summary, error) {
+	if err, ok := m.dependentsOfErr[parentID]; ok && err != nil {
+		return nil, err
+	}
+	return m.dependentsOfResults[parentID], nil
 }
 
 func (m *mockDocker) ContainerEvents(_ context.Context, _, _ time.Time, _ bool) ([]events.Message, error) {
