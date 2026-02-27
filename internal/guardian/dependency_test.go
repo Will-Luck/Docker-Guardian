@@ -2,6 +2,7 @@ package guardian
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +219,458 @@ func TestCheckDependencyOrphans_SkipsAutoRecovered(t *testing.T) {
 
 	if len(dock.startCalls) != 0 {
 		t.Error("should not start auto-recovered container")
+	}
+}
+
+// --- Cascade restart tests ---
+
+func TestCascadeRestartOnParentStart(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  0, // no delay for fast tests
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	dep1ID := "dep001234567890abcdef"
+	dep2ID := "dep002234567890abcdef"
+
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     dep1ID,
+			Names:  []string{"/dep-app-1"},
+			Labels: map[string]string{},
+		},
+		{
+			ID:     dep2ID,
+			Names:  []string{"/dep-app-2"},
+			Labels: map[string]string{},
+		},
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 2 {
+		t.Fatalf("expected 2 restart calls, got %d", len(dock.restartCalls))
+	}
+	if dock.restartCalls[0] != dep1ID {
+		t.Errorf("expected first restart to be %s, got %s", dep1ID, dock.restartCalls[0])
+	}
+	if dock.restartCalls[1] != dep2ID {
+		t.Errorf("expected second restart to be %s, got %s", dep2ID, dock.restartCalls[1])
+	}
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+
+	if len(notif.actions) != 2 {
+		t.Fatalf("expected 2 action notifications, got %d: %v", len(notif.actions), notif.actions)
+	}
+	for _, a := range notif.actions {
+		if !strings.Contains(a, "Cascade:") {
+			t.Errorf("expected cascade notification, got %q", a)
+		}
+		if !strings.Contains(a, "restarted") {
+			t.Errorf("expected 'restarted' in notification, got %q", a)
+		}
+	}
+}
+
+func TestCascadeRestartDisabled(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      false,
+		MonitorDependencies: true,
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+
+	// Even if dependents exist, they shouldn't be queried
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     "dep001234567890abcdef",
+			Names:  []string{"/dep-app-1"},
+			Labels: map[string]string{},
+		},
+	}
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart anything when cascade is disabled")
+	}
+}
+
+func TestCascadeRestartDisabledWhenMonitorDependenciesFalse(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: false,
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     "dep001234567890abcdef",
+			Names:  []string{"/dep-app-1"},
+			Labels: map[string]string{},
+		},
+	}
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart anything when MonitorDependencies is false")
+	}
+}
+
+func TestCascadeRestartNoDependents(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  0,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	// No dependents registered — DependentsOf returns empty slice
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart anything when parent has no dependents")
+	}
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+
+	if len(notif.actions) != 0 {
+		t.Error("should not send notifications when there are no dependents")
+	}
+}
+
+func TestCascadeRestartCircuitBreaker(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  0,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     depID,
+			Names:  []string{"/dep-app-1"},
+			Labels: map[string]string{},
+		},
+	}
+
+	// Use a tracker with budget=1 so the circuit opens after one restart
+	tcfg := TrackerConfig{
+		BackoffMultiplier: 2,
+		BackoffMax:        300 * time.Second,
+		BackoffResetAfter: 600 * time.Second,
+		RestartBudget:     1,
+		RestartWindow:     300 * time.Second,
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(tcfg, clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	// Exhaust the budget: record a restart so the circuit opens
+	g.tracker.RecordRestart(depID)
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Errorf("should not restart when circuit breaker is active, got %d restarts", len(dock.restartCalls))
+	}
+}
+
+func TestCascadeRestartDependentsOfError(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  0,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	dock.dependentsOfErr[parentID] = errors.New("docker API error")
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart when DependentsOf returns error")
+	}
+}
+
+func TestCascadeRestartPartialFailure(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  0,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	dep1ID := "dep001234567890abcdef"
+	dep2ID := "dep002234567890abcdef"
+
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     dep1ID,
+			Names:  []string{"/dep-fail"},
+			Labels: map[string]string{},
+		},
+		{
+			ID:     dep2ID,
+			Names:  []string{"/dep-ok"},
+			Labels: map[string]string{},
+		},
+	}
+	dock.restartErr[dep1ID] = errors.New("restart failed")
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	// Both should be attempted
+	if len(dock.restartCalls) != 2 {
+		t.Fatalf("expected 2 restart attempts, got %d", len(dock.restartCalls))
+	}
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+
+	// Should have 2 notifications: 1 failure + 1 success
+	if len(notif.actions) != 2 {
+		t.Fatalf("expected 2 notifications, got %d: %v", len(notif.actions), notif.actions)
+	}
+	if !strings.Contains(notif.actions[0], "failed") {
+		t.Errorf("expected failure notification for dep1, got %q", notif.actions[0])
+	}
+	if !strings.Contains(notif.actions[1], "restarted") {
+		t.Errorf("expected success notification for dep2, got %q", notif.actions[1])
+	}
+}
+
+func TestCascadeRestartSettleDelay(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  15,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     depID,
+			Names:  []string{"/dep-app"},
+			Labels: map[string]string{},
+		},
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	// The mock clock's After() returns immediately (buffered channel),
+	// so the settle delay is effectively skipped in tests.
+	// This test verifies the code path completes without blocking.
+	g.handleCascadeRestart(context.Background(), parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 1 {
+		t.Fatalf("expected 1 restart call after settle delay, got %d", len(dock.restartCalls))
+	}
+	if dock.restartCalls[0] != depID {
+		t.Errorf("restarted wrong container: %s", dock.restartCalls[0])
+	}
+}
+
+func TestCascadeRestartContextCancelled(t *testing.T) {
+	cfg := &config.Config{
+		CascadeRestart:      true,
+		MonitorDependencies: true,
+		CascadeSettleDelay:  15,
+		DefaultStopTimeout:  10,
+		WatchtowerCooldown:  0,
+		GracePeriod:         0,
+		BackupLabel:         "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	// Use a special clock that blocks on After() to test context cancellation
+	clk := &blockingClock{now: time.Now()}
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.dependentsOfResults[parentID] = []container.Summary{
+		{
+			ID:     depID,
+			Names:  []string{"/dep-app"},
+			Labels: map[string]string{},
+		},
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately — settle delay select should pick ctx.Done()
+
+	g.handleCascadeRestart(ctx, parentID)
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart when context is cancelled during settle delay")
 	}
 }

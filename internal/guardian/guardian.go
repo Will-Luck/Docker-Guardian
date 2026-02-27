@@ -157,7 +157,7 @@ func (g *Guardian) handleEvent(ctx context.Context, evt docker.ContainerEvent) {
 		g.recordOrchestrationActivity(evt)
 
 	case "start":
-		// No action needed — tracked for potential future use
+		go g.handleCascadeRestart(ctx, evt.ContainerID)
 	}
 }
 

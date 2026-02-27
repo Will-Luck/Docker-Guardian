@@ -7,6 +7,75 @@ import (
 	"time"
 )
 
+// handleCascadeRestart restarts all running containers sharing a network namespace
+// with the given parent container. Called when a parent's "start" event fires.
+func (g *Guardian) handleCascadeRestart(ctx context.Context, parentID string) {
+	if !g.cfg.CascadeRestart || !g.cfg.MonitorDependencies {
+		return
+	}
+
+	deps, err := g.docker.DependentsOf(ctx, parentID)
+	if err != nil {
+		g.log.Error("cascade: failed to query dependents", "parent", parentID, "error", err)
+		return
+	}
+	if len(deps) == 0 {
+		return
+	}
+
+	// Log what we found
+	names := make([]string, len(deps))
+	for i, d := range deps {
+		names[i] = strings.TrimPrefix(d.Names[0], "/")
+	}
+	g.log.Info("cascade: parent restarted, restarting dependents",
+		"parent", parentID, "dependents", names, "count", len(deps))
+
+	// Settle delay: wait for parent's network to stabilise
+	if g.cfg.CascadeSettleDelay > 0 {
+		g.log.Debug("cascade: waiting for parent to settle", "delay", g.cfg.CascadeSettleDelay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-g.clock.After(time.Duration(g.cfg.CascadeSettleDelay) * time.Second):
+		}
+	}
+
+	for _, dep := range deps {
+		name := strings.TrimPrefix(dep.Names[0], "/")
+		shortID := dep.ID[:12]
+
+		if g.shouldSkip(ctx, dep.ID, name, dep.Labels) {
+			continue
+		}
+
+		if allowed, reason := g.tracker.ShouldRestart(dep.ID); !allowed {
+			msg := g.tracker.FormatSkipReason(dep.ID, name, reason)
+			now := g.clock.Now().Format("02-01-2006 15:04:05")
+			fmt.Printf("%s cascade: %s\n", now, msg)
+			continue
+		}
+
+		timeout := g.cfg.DefaultStopTimeout
+		now := g.clock.Now().Format("02-01-2006 15:04:05")
+		fmt.Printf("%s cascade: restarting dependent %s (%s) with %ds timeout\n",
+			now, name, shortID, timeout)
+
+		if err := g.docker.RestartContainer(ctx, dep.ID, timeout); err != nil {
+			g.log.Error("cascade: restart failed", "name", name, "id", shortID, "error", err)
+			g.notifier.Action(fmt.Sprintf("Cascade: container %s (%s) restart failed after parent %s restarted",
+				name, shortID, parentID[:12]))
+			continue
+		}
+
+		g.tracker.RecordRestart(dep.ID)
+		g.notifier.Action(fmt.Sprintf("Cascade: container %s (%s) restarted after parent %s restarted",
+			name, shortID, parentID[:12]))
+		fmt.Printf("%s cascade: restarted %s (%s)\n", now, name, shortID)
+		g.runPostRestartScript(name, shortID, "cascade", timeout)
+	}
+}
+
 // checkDependencyOrphans finds exited containers whose parent (via container:X
 // network mode) is still running, and starts them.
 func (g *Guardian) checkDependencyOrphans(ctx context.Context) {

@@ -211,3 +211,14 @@ func (c *mockClock) After(d time.Duration) <-chan time.Time {
 }
 func (c *mockClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
 func (c *mockClock) Advance(d time.Duration)         { c.now = c.now.Add(d) }
+
+// blockingClock is a clock whose After() never fires, for testing context cancellation.
+type blockingClock struct {
+	now time.Time
+}
+
+func (c *blockingClock) Now() time.Time { return c.now }
+func (c *blockingClock) After(_ time.Duration) <-chan time.Time {
+	return make(chan time.Time) // unbuffered, never receives — blocks forever
+}
+func (c *blockingClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
