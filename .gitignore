@@ -5,6 +5,7 @@
 
 # Go build output
 /guardian
+/bin/
 
 # Internal CI / dev files
 .gitea/

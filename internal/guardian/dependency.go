@@ -105,6 +105,14 @@ func (g *Guardian) checkNetworkHealth(ctx context.Context) {
 
 		// Probe network connectivity
 		if err := g.docker.ExecPing(ctx, c.ID, g.cfg.NetworkHealthcheckTarget); err != nil {
+			// Container doesn't have ping installed — skip it, not a network issue
+			if strings.Contains(err.Error(), "executable file not found") ||
+				strings.Contains(err.Error(), "not found in $PATH") {
+				g.log.Debug("network health: ping not available, skipping",
+					"name", name, "error", err)
+				continue
+			}
+
 			g.log.Warn("network health: ping failed, restarting",
 				"name", name, "target", g.cfg.NetworkHealthcheckTarget, "error", err)
 

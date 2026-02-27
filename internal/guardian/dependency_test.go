@@ -749,6 +749,69 @@ func TestNetworkHealthcheckSkipsHealthy(t *testing.T) {
 	}
 }
 
+func TestNetworkHealthcheckSkipsNoPingBinary(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:       true,
+		NetworkHealthcheckTarget: "8.8.8.8",
+		MonitorDependencies:      true,
+		DefaultStopTimeout:       10,
+		WatchtowerCooldown:       0,
+		GracePeriod:              0,
+		BackupLabel:              "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.runningContainers = []container.Summary{
+		{ID: depID, Names: []string{"/dep-app"}},
+	}
+	dock.inspectResults[depID] = container.InspectResponse{
+		Name: "/dep-app",
+		HostConfig: &container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + parentID),
+		},
+		Config: &container.Config{
+			Labels: map[string]string{},
+		},
+		State: &container.State{},
+	}
+
+	// Simulate the exact error Docker returns when ping isn't installed
+	dock.execPingErr[depID] = errors.New(
+		`exec start: Error response from daemon: OCI runtime exec failed: exec failed: ` +
+			`unable to start container process: exec: "ping": executable file not found in $PATH`)
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Errorf("should not restart container without ping binary, got %d restarts", len(dock.restartCalls))
+	}
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+
+	if len(notif.actions) != 0 {
+		t.Errorf("should not send notifications for missing ping binary, got %v", notif.actions)
+	}
+}
+
 func TestNetworkHealthcheckDisabled(t *testing.T) {
 	cfg := &config.Config{
 		NetworkHealthcheck:  false,
