@@ -158,3 +158,39 @@ func dependentsOf(ctx context.Context, api API, parentID string) ([]container.Su
 	}
 	return deps, nil
 }
+
+// ExecPing runs "ping -c1 -W3 <target>" inside the container.
+// Returns nil if the ping succeeds, error otherwise.
+func (c *Client) ExecPing(ctx context.Context, containerID string, target string) error {
+	resp, err := c.api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		Cmd:          []string{"ping", "-c", "1", "-W", "3", target},
+		AttachStdout: false,
+		AttachStderr: false,
+	})
+	if err != nil {
+		return fmt.Errorf("exec create: %w", err)
+	}
+
+	if _, err := c.api.ExecStart(ctx, resp.ID, client.ExecStartOptions{Detach: true}); err != nil {
+		return fmt.Errorf("exec start: %w", err)
+	}
+
+	// Poll for completion and check exit code.
+	for {
+		inspect, err := c.api.ExecInspect(ctx, resp.ID, client.ExecInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("exec inspect: %w", err)
+		}
+		if !inspect.Running {
+			if inspect.ExitCode != 0 {
+				return fmt.Errorf("ping exited with code %d", inspect.ExitCode)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}

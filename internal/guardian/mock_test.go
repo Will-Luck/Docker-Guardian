@@ -46,6 +46,8 @@ type mockDocker struct {
 	dependentsOfResults map[string][]container.Summary
 	dependentsOfErr     map[string]error
 
+	execPingErr map[string]error
+
 	containerEvents    []events.Message
 	containerEventsErr error
 }
@@ -65,6 +67,7 @@ func newMockDocker() *mockDocker {
 		healthLogErr:        make(map[string]error),
 		dependentsOfResults: make(map[string][]container.Summary),
 		dependentsOfErr:     make(map[string]error),
+		execPingErr:         make(map[string]error),
 	}
 }
 
@@ -143,6 +146,13 @@ func (m *mockDocker) DependentsOf(_ context.Context, parentID string) ([]contain
 		return nil, err
 	}
 	return m.dependentsOfResults[parentID], nil
+}
+
+func (m *mockDocker) ExecPing(_ context.Context, containerID string, _ string) error {
+	if err, ok := m.execPingErr[containerID]; ok {
+		return err
+	}
+	return nil
 }
 
 func (m *mockDocker) ContainerEvents(_ context.Context, _, _ time.Time, _ bool) ([]events.Message, error) {

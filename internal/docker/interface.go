@@ -22,6 +22,7 @@ type API interface {
 	ContainerFinishedAt(ctx context.Context, id string) (time.Time, error)
 	ContainerHealthLog(ctx context.Context, id string) (string, error)
 	DependentsOf(ctx context.Context, parentID string) ([]container.Summary, error)
+	ExecPing(ctx context.Context, containerID string, target string) error
 	ContainerEvents(ctx context.Context, since, until time.Time, orchestrationOnly bool) ([]events.Message, error)
 	Close() error
 }

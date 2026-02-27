@@ -63,6 +63,9 @@ func (m *testMockAPI) ContainerEvents(_ context.Context, _, _ time.Time, _ bool)
 func (m *testMockAPI) DependentsOf(_ context.Context, _ string) ([]container.Summary, error) {
 	return nil, nil
 }
+func (m *testMockAPI) ExecPing(_ context.Context, _ string, _ string) error {
+	return nil
+}
 func (m *testMockAPI) Close() error { return nil }
 
 // Verify testMockAPI satisfies the API interface.
