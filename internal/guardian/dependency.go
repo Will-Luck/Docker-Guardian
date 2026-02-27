@@ -76,6 +76,70 @@ func (g *Guardian) handleCascadeRestart(ctx context.Context, parentID string) {
 	}
 }
 
+// checkNetworkHealth probes containers that share a network namespace to
+// verify they still have working connectivity. Safety net for cases where
+// the event-driven cascade misses a parent restart.
+func (g *Guardian) checkNetworkHealth(ctx context.Context) {
+	if !g.cfg.NetworkHealthcheck || !g.cfg.MonitorDependencies {
+		return
+	}
+
+	running, err := g.docker.RunningContainers(ctx)
+	if err != nil {
+		g.log.Error("network health: failed to list containers", "error", err)
+		return
+	}
+
+	for _, c := range running {
+		info, err := g.docker.InspectContainer(ctx, c.ID)
+		if err != nil {
+			continue
+		}
+		mode := string(info.HostConfig.NetworkMode)
+		if !strings.HasPrefix(mode, "container:") {
+			continue
+		}
+
+		name := strings.TrimPrefix(info.Name, "/")
+		shortID := c.ID[:12]
+
+		// Probe network connectivity
+		if err := g.docker.ExecPing(ctx, c.ID, g.cfg.NetworkHealthcheckTarget); err != nil {
+			g.log.Warn("network health: ping failed, restarting",
+				"name", name, "target", g.cfg.NetworkHealthcheckTarget, "error", err)
+
+			if g.shouldSkip(ctx, c.ID, name, info.Config.Labels) {
+				continue
+			}
+
+			if allowed, reason := g.tracker.ShouldRestart(c.ID); !allowed {
+				msg := g.tracker.FormatSkipReason(c.ID, name, reason)
+				now := g.clock.Now().Format("02-01-2006 15:04:05")
+				fmt.Printf("%s network health: %s\n", now, msg)
+				continue
+			}
+
+			timeout := g.cfg.DefaultStopTimeout
+			now := g.clock.Now().Format("02-01-2006 15:04:05")
+			fmt.Printf("%s network health: restarting %s (%s) with %ds timeout\n",
+				now, name, shortID, timeout)
+
+			if err := g.docker.RestartContainer(ctx, c.ID, timeout); err != nil {
+				g.log.Error("network health: restart failed", "name", name, "id", shortID, "error", err)
+				g.notifier.Action(fmt.Sprintf("Network health: container %s (%s) restart failed (ping to %s failed)",
+					name, shortID, g.cfg.NetworkHealthcheckTarget))
+				continue
+			}
+
+			g.tracker.RecordRestart(c.ID)
+			g.notifier.Action(fmt.Sprintf("Network health: container %s (%s) restarted (ping to %s failed)",
+				name, shortID, g.cfg.NetworkHealthcheckTarget))
+			fmt.Printf("%s network health: restarted %s (%s)\n", now, name, shortID)
+			g.runPostRestartScript(name, shortID, "network-health", timeout)
+		}
+	}
+}
+
 // checkDependencyOrphans finds exited containers whose parent (via container:X
 // network mode) is still running, and starts them.
 func (g *Guardian) checkDependencyOrphans(ctx context.Context) {

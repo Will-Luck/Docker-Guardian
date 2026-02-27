@@ -626,6 +626,299 @@ func TestCascadeRestartSettleDelay(t *testing.T) {
 	}
 }
 
+// --- Network healthcheck tests ---
+
+func TestNetworkHealthcheckRestartsUnreachable(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:       true,
+		NetworkHealthcheckTarget: "8.8.8.8",
+		MonitorDependencies:      true,
+		DefaultStopTimeout:       10,
+		WatchtowerCooldown:       0,
+		GracePeriod:              0,
+		BackupLabel:              "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	// Running container that shares network namespace with parent
+	dock.runningContainers = []container.Summary{
+		{ID: depID, Names: []string{"/dep-app"}},
+	}
+	dock.inspectResults[depID] = container.InspectResponse{
+		Name: "/dep-app",
+		HostConfig: &container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + parentID),
+		},
+		Config: &container.Config{
+			Labels: map[string]string{},
+		},
+		State: &container.State{},
+	}
+
+	// Ping fails — network is broken
+	dock.execPingErr[depID] = errors.New("ping: bad address")
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 1 {
+		t.Fatalf("expected 1 restart call, got %d", len(dock.restartCalls))
+	}
+	if dock.restartCalls[0] != depID {
+		t.Errorf("restarted wrong container: %s", dock.restartCalls[0])
+	}
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+
+	if len(notif.actions) != 1 {
+		t.Fatalf("expected 1 notification, got %d: %v", len(notif.actions), notif.actions)
+	}
+	if !strings.Contains(notif.actions[0], "Network health") {
+		t.Errorf("expected network health notification, got %q", notif.actions[0])
+	}
+}
+
+func TestNetworkHealthcheckSkipsHealthy(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:       true,
+		NetworkHealthcheckTarget: "8.8.8.8",
+		MonitorDependencies:      true,
+		DefaultStopTimeout:       10,
+		WatchtowerCooldown:       0,
+		GracePeriod:              0,
+		BackupLabel:              "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.runningContainers = []container.Summary{
+		{ID: depID, Names: []string{"/dep-app"}},
+	}
+	dock.inspectResults[depID] = container.InspectResponse{
+		Name: "/dep-app",
+		HostConfig: &container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + parentID),
+		},
+		Config: &container.Config{
+			Labels: map[string]string{},
+		},
+		State: &container.State{},
+	}
+
+	// Ping succeeds — no error in execPingErr means success
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Errorf("should not restart healthy container, got %d restarts", len(dock.restartCalls))
+	}
+}
+
+func TestNetworkHealthcheckDisabled(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:  false,
+		MonitorDependencies: true,
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not make any calls when healthcheck is disabled")
+	}
+}
+
+func TestNetworkHealthcheckDisabledWhenMonitorDependenciesFalse(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:  true,
+		MonitorDependencies: false,
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	g := &Guardian{
+		cfg:      cfg,
+		docker:   dock,
+		notifier: notif,
+		log:      logging.New(false),
+		clock:    clk,
+		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not make any calls when MonitorDependencies is false")
+	}
+}
+
+func TestNetworkHealthcheckSkipsNonSharedNamespace(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:       true,
+		NetworkHealthcheckTarget: "8.8.8.8",
+		MonitorDependencies:      true,
+		DefaultStopTimeout:       10,
+		WatchtowerCooldown:       0,
+		GracePeriod:              0,
+		BackupLabel:              "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	bridgeID := "bridge01234567890abcde"
+
+	dock.runningContainers = []container.Summary{
+		{ID: bridgeID, Names: []string{"/standalone-app"}},
+	}
+	dock.inspectResults[bridgeID] = container.InspectResponse{
+		Name: "/standalone-app",
+		HostConfig: &container.HostConfig{
+			NetworkMode: "bridge",
+		},
+		Config: &container.Config{
+			Labels: map[string]string{},
+		},
+		State: &container.State{},
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Error("should not restart container with bridge network mode")
+	}
+}
+
+func TestNetworkHealthcheckCircuitBreaker(t *testing.T) {
+	cfg := &config.Config{
+		NetworkHealthcheck:       true,
+		NetworkHealthcheckTarget: "8.8.8.8",
+		MonitorDependencies:      true,
+		DefaultStopTimeout:       10,
+		WatchtowerCooldown:       0,
+		GracePeriod:              0,
+		BackupLabel:              "",
+	}
+	dock := newMockDocker()
+	notif := &mockNotifier{}
+	clk := newMockClock(time.Now())
+
+	parentID := "parent1234567890abcdef"
+	depID := "dep001234567890abcdef"
+
+	dock.runningContainers = []container.Summary{
+		{ID: depID, Names: []string{"/dep-app"}},
+	}
+	dock.inspectResults[depID] = container.InspectResponse{
+		Name: "/dep-app",
+		HostConfig: &container.HostConfig{
+			NetworkMode: container.NetworkMode("container:" + parentID),
+		},
+		Config: &container.Config{
+			Labels: map[string]string{},
+		},
+		State: &container.State{},
+	}
+	dock.execPingErr[depID] = errors.New("ping: timeout")
+
+	// Use a tracker with budget=1 so the circuit opens after one restart
+	tcfg := TrackerConfig{
+		BackoffMultiplier: 2,
+		BackoffMax:        300 * time.Second,
+		BackoffResetAfter: 600 * time.Second,
+		RestartBudget:     1,
+		RestartWindow:     300 * time.Second,
+	}
+
+	g := &Guardian{
+		cfg:                 cfg,
+		docker:              dock,
+		notifier:            notif,
+		log:                 logging.New(false),
+		clock:               clk,
+		tracker:             NewRestartTracker(tcfg, clk),
+		orchestrationEvents: make(map[string]time.Time),
+	}
+
+	// Exhaust the budget
+	g.tracker.RecordRestart(depID)
+
+	g.checkNetworkHealth(context.Background())
+
+	dock.mu.Lock()
+	defer dock.mu.Unlock()
+
+	if len(dock.restartCalls) != 0 {
+		t.Errorf("should not restart when circuit breaker is active, got %d restarts", len(dock.restartCalls))
+	}
+}
+
 func TestCascadeRestartContextCancelled(t *testing.T) {
 	cfg := &config.Config{
 		CascadeRestart:      true,

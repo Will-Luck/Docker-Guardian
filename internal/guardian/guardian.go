@@ -117,6 +117,7 @@ func (g *Guardian) runPolling(ctx context.Context) error {
 
 		g.checkUnhealthy(ctx)
 		g.checkDependencyOrphans(ctx)
+		g.checkNetworkHealth(ctx)
 
 		select {
 		case <-time.After(time.Duration(g.cfg.Interval) * time.Second):
@@ -134,6 +135,7 @@ func (g *Guardian) fullScan(ctx context.Context) {
 
 	g.checkUnhealthy(ctx)
 	g.checkDependencyOrphans(ctx)
+	g.checkNetworkHealth(ctx)
 }
 
 // handleEvent processes a single Docker event with debouncing.
