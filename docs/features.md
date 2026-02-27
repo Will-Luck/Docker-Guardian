@@ -33,6 +33,15 @@ Auto-detects network dependencies via Docker API — **no labels needed**. On ea
 
 Multi-level dependencies (A→B→C) resolve naturally over multiple cycles.
 
+## Cascade Restart & Network Healthcheck
+
+Handles the case where a network parent restarts (not dies) and dependents lose connectivity:
+
+- **Cascade restart** — when a `--network=container:X` parent restarts, Guardian automatically restarts all dependents after a configurable settle delay (default 15s). This covers planned restarts (Watchtower updates, manual restarts) where dependents don't exit but lose network.
+- **Network healthcheck** — periodic ping check (`docker exec ... ping -c1 -W3 <target>`) on containers sharing a network namespace. If the ping fails, Guardian restarts the container. Acts as a safety net for cases where the cascade didn't fire or connectivity degraded silently.
+
+Both features are enabled by default and require no labels.
+
 ## Watchtower Awareness
 
 Detects active orchestration (Watchtower, manual `docker-compose up`, etc.) via Docker events:
@@ -111,6 +120,18 @@ Container event received
 │   ├── Wait start delay...
 │   ├── Parent still running? → Start container
 │   └── Parent stopped? → SKIP
+│
+├── start (container is a network parent)
+│   ├── CASCADE_RESTART disabled? → SKIP
+│   ├── Wait settle delay...
+│   └── Restart all dependents using --network=container:X
+│
+├── periodic scan (network healthcheck)
+│   ├── NETWORK_HEALTHCHECK disabled? → SKIP
+│   ├── Container uses --network=container:X? → Ping target
+│   │   ├── Ping succeeds → OK
+│   │   └── Ping fails → Restart container
+│   └── Not a network dependent → SKIP
 │
 └── create/destroy
     └── Record orchestration activity

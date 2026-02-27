@@ -65,6 +65,10 @@ docker run --label autoheal.stop.timeout=30 ...
 | `AUTOHEAL_WATCHTOWER_COOLDOWN` | `300` | Skip if orchestration activity detected within this window. `0` to disable |
 | `AUTOHEAL_WATCHTOWER_SCOPE` | `all` | `all` = skip every container. `affected` = only skip containers with events |
 | `AUTOHEAL_WATCHTOWER_EVENTS` | `orchestration` | `orchestration` = `destroy`+`create` only. `all` = all lifecycle events |
+| `AUTOHEAL_CASCADE_RESTART` | `true` | Restart dependent containers when their `--network=container:X` parent restarts |
+| `AUTOHEAL_CASCADE_SETTLE_DELAY` | `15` | Seconds to wait after parent starts before cascading restarts to dependents |
+| `AUTOHEAL_NETWORK_HEALTHCHECK` | `true` | Periodically ping-check containers sharing a network namespace |
+| `AUTOHEAL_NETWORK_HEALTHCHECK_TARGET` | `8.8.8.8` | IP address to ping for network health checks |
 
 ## Notification Settings
 

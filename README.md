@@ -43,6 +43,7 @@ Docker-Guardian restarts unhealthy containers, same as docker-autoheal. On top o
 
 - **Circuit breaker** — exponential backoff and restart budgets prevent restart storms
 - **Dependency recovery** — auto-restarts containers orphaned when their `--network=container:X` parent dies (exit code 128)
+- **Network namespace cascade** — restarts dependents when their network parent restarts, with periodic ping-based health checks as a safety net
 - **Event-driven** — reacts to Docker events in real-time instead of polling
 - **Orchestration awareness** — pauses during Watchtower updates and backup jobs
 - **Notifications** — 9 native services (Gotify, Discord, Slack, Telegram, Pushover, Pushbullet, LunaSea, Email, Webhook) with rate limiting and retry
@@ -74,6 +75,10 @@ Docker-Guardian detects this and restarts them automatically.
 | `AUTOHEAL_WATCHTOWER_COOLDOWN` | `300` | Pause after orchestration activity (`0` to disable) |
 | `AUTOHEAL_RESTART_BUDGET` | `5` | Max restarts per window before circuit opens |
 | `AUTOHEAL_UNHEALTHY_THRESHOLD` | `1` | Consecutive unhealthy checks before action |
+| `AUTOHEAL_CASCADE_RESTART` | `true` | Restart dependents when their network parent restarts |
+| `AUTOHEAL_CASCADE_SETTLE_DELAY` | `15` | Seconds to wait after parent starts before cascading |
+| `AUTOHEAL_NETWORK_HEALTHCHECK` | `true` | Periodic ping check for containers sharing a network namespace |
+| `AUTOHEAL_NETWORK_HEALTHCHECK_TARGET` | `8.8.8.8` | IP to ping for network health checks |
 | `NOTIFY_HOSTNAME` | _(empty)_ | Prefix notifications with `[hostname]` |
 | `METRICS_PORT` | `0` | Prometheus metrics port (`0` = disabled) |
 | `TZ` | _(empty)_ | Timezone (e.g. `Europe/London`) |
