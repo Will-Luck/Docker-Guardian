@@ -3,7 +3,7 @@
 ARG ALPINE_VERSION=3.20
 
 # ── Builder ───────────────────────────────────────────────────────────
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
