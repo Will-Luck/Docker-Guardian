@@ -4,14 +4,25 @@ ARG ALPINE_VERSION=3.20
 
 # ── Builder ───────────────────────────────────────────────────────────
 FROM golang:1.24-alpine AS builder
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /guardian ./cmd/guardian
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /guardian ./cmd/guardian
 
 # ── Runtime ───────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION}
+
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/Will-Luck/Docker-Guardian" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.title="docker-guardian" \
+      org.opencontainers.image.description="Dependency-aware container recovery — heals unhealthy containers and orchestrates cascaded restarts"
 
 ENV AUTOHEAL_CONTAINER_LABEL=autoheal \
     AUTOHEAL_START_PERIOD=0 \

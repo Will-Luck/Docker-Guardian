@@ -1,9 +1,14 @@
 # Docker-Guardian
 
-[![CI](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/build.yml/badge.svg)](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/build.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/Will-Luck/Docker-Guardian)](https://github.com/Will-Luck/Docker-Guardian/releases/latest)
+[![CI](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/Will-Luck/Docker-Guardian/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Will-Luck/Docker-Guardian)](https://github.com/Will-Luck/Docker-Guardian/releases)
+[![Licence](https://img.shields.io/github/license/Will-Luck/Docker-Guardian)](LICENSE)
+[![GHCR](https://img.shields.io/badge/ghcr.io-will--luck%2Fdocker--guardian-blue?logo=github)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-willluck%2Fdocker--guardian-blue?logo=docker)](https://hub.docker.com/r/willluck/docker-guardian)
+[![Pulls](https://img.shields.io/endpoint?url=https://pkgbadge.pphserv.uk/Will-Luck/Docker-Guardian/pulls.json)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
+[![Image Size](https://img.shields.io/endpoint?url=https://pkgbadge.pphserv.uk/Will-Luck/Docker-Guardian/size.json)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
+[![Platforms](https://img.shields.io/endpoint?url=https://pkgbadge.pphserv.uk/Will-Luck/Docker-Guardian/arch.json)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
 [![Downloads](https://img.shields.io/github/downloads/Will-Luck/Docker-Guardian/total)](https://github.com/Will-Luck/Docker-Guardian/releases)
-[![GHCR](https://img.shields.io/badge/ghcr.io-docker--guardian-blue?logo=github)](https://github.com/Will-Luck/Docker-Guardian/pkgs/container/docker-guardian)
 
 Dependency-aware container recovery for Docker. Rewritten in Go from [willfarrell/docker-autoheal](https://github.com/willfarrell/docker-autoheal) (MIT).
 

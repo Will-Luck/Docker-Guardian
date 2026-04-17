@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate build date
+        id: build-date
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            docker.io/willluck/docker-guardian
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            BUILD_DATE=${{ steps.build-date.outputs.value }}
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,scope=release,mode=max
+
+      - name: Sync README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: willluck/docker-guardian
+          short-description: Dependency-aware container recovery — heals unhealthy containers and orchestrates cascaded restarts
+          readme-filepath: ./README.md
+
+  binaries:
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build cross-platform binaries
+        run: |
+          mkdir -p dist
+          for pair in linux/amd64 linux/arm64 linux/arm/v7 darwin/amd64 darwin/arm64; do
+            OS="${pair%%/*}"
+            ARCH_RAW="${pair#*/}"
+            ARCH="${ARCH_RAW//\//-}"
+            GOARM=""
+            if [[ "$ARCH_RAW" == arm/v* ]]; then
+              GOARM="${ARCH_RAW##*v}"
+              export GOARM
+            fi
+            GOOS="$OS" GOARCH="${ARCH_RAW%%/*}" CGO_ENABLED=0 \
+              go build \
+                -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+                -o "dist/docker-guardian-${OS}-${ARCH}" ./cmd/guardian
+          done
+          ls -la dist/
+
+      - name: Extract release notes from tag annotation
+        id: notes
+        run: |
+          set -euo pipefail
+          body=$(git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}")
+          if [ -z "$body" ]; then
+            body=$(git log -1 --pretty=%B "${GITHUB_REF_NAME}")
+          fi
+          printf '%s' "$body" > release-notes.md
+          echo "Wrote $(wc -c < release-notes.md) bytes to release-notes.md"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          make_latest: true
+          files: dist/*
