@@ -66,8 +66,13 @@ func TestCheckDown_AlertsAfterGraceForUnlessStopped(t *testing.T) {
 func TestCheckDown_RecoveryAfterGraceNoAlert(t *testing.T) {
 	cfg := &config.Config{Interval: 5, DownGrace: 120, RestartLoopThreshold: 5, RestartLoopWindow: 300}
 	n := &mockNotifier{}
+	dock := newMockDocker()
+	// Seed an inspect that WOULD alert (unless-stopped, not running) so this test
+	// genuinely proves clearDown: if start failed to clear the down record, the
+	// post-grace check would inspect this and fire an alert, failing the test.
+	dock.inspectResults["radarr-id"] = inspectDown("radarr", "unless-stopped", false)
 	clk := newMockClock(time.Unix(1_000_000, 0))
-	g := newTestGuardian(cfg, newMockDocker(), n, clk)
+	g := newTestGuardian(cfg, dock, n, clk)
 	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "die"})
 	clk.Advance(200 * time.Second) // past the 120s grace
 	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "start"}) // clearDown must remove the down record
