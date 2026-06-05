@@ -149,6 +149,47 @@ func (g *Guardian) fullScan(ctx context.Context) {
 	g.checkUnhealthy(ctx)
 	g.checkDependencyOrphans(ctx)
 	g.checkNetworkHealth(ctx)
+	g.checkDownContainers(ctx)
+}
+
+// checkDownContainers alerts on containers that died, are meant to be up
+// (restart policy unless-stopped/always, or named in EXPECTED_UP), and have
+// not recovered within the grace period. One alert per down episode.
+func (g *Guardian) checkDownContainers(ctx context.Context) {
+	grace := time.Duration(g.cfg.DownGrace) * time.Second
+	now := g.clock.Now()
+
+	g.downMu.Lock()
+	pending := make(map[string]time.Time)
+	for id, since := range g.downSince {
+		if !g.downAlerted[id] && now.Sub(since) >= grace {
+			pending[id] = since
+		}
+	}
+	g.downMu.Unlock()
+
+	for id, since := range pending {
+		info, err := g.docker.InspectContainer(ctx, id)
+		if err != nil {
+			continue
+		}
+		if info.State != nil && info.State.Running {
+			g.clearDown(id)
+			continue
+		}
+		name := strings.TrimPrefix(info.Name, "/")
+		policy := ""
+		if info.HostConfig != nil {
+			policy = string(info.HostConfig.RestartPolicy.Name)
+		}
+		if policy == "unless-stopped" || policy == "always" || g.expectedUp[name] {
+			g.notifier.Alert(fmt.Sprintf("[CRITICAL] %s is down: exited %s ago and not recovering (restart=%s)",
+				name, now.Sub(since).Round(time.Second), policy))
+			g.downMu.Lock()
+			g.downAlerted[id] = true
+			g.downMu.Unlock()
+		}
+	}
 }
 
 // handleEvent processes a single Docker event with debouncing.
