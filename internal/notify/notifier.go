@@ -21,6 +21,7 @@ type Notifier interface {
 	Startup(text string)
 	Action(text string)
 	Skip(text string)
+	Alert(text string)
 	Close()
 }
 
@@ -171,6 +172,22 @@ func (d *Dispatcher) Skip(text string) {
 		return
 	}
 	d.dispatch(text, false)
+}
+
+// Alert sends a proactive alert (crash loop, container down) that is not tied
+// to a guardian-initiated action. Gated by the "alerts" event category.
+func (d *Dispatcher) Alert(text string) {
+	if !d.hasEvent("alerts") {
+		return
+	}
+	key := text
+	if len(key) > 50 {
+		key = key[:50]
+	}
+	if d.isRateLimited(key) {
+		return
+	}
+	d.dispatch(text, true)
 }
 
 func (d *Dispatcher) dispatch(text string, retry bool) {

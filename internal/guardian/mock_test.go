@@ -167,6 +167,7 @@ type mockNotifier struct {
 	startups []string
 	actions  []string
 	skips    []string
+	alerts   []string
 	closed   bool
 }
 
@@ -185,6 +186,12 @@ func (m *mockNotifier) Action(text string) {
 func (m *mockNotifier) Skip(text string) {
 	m.mu.Lock()
 	m.skips = append(m.skips, text)
+	m.mu.Unlock()
+}
+
+func (m *mockNotifier) Alert(text string) {
+	m.mu.Lock()
+	m.alerts = append(m.alerts, text)
 	m.mu.Unlock()
 }
 

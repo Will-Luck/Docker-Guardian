@@ -83,3 +83,14 @@ func TestHasEventDebug(t *testing.T) {
 		t.Error("'debug' should include startup")
 	}
 }
+
+func TestAlert_GatedByCategory(t *testing.T) {
+	off := NewDispatcher(&config.Config{CurlTimeout: 5, NotifyEvents: "actions"}, logging.New(false))
+	if off.hasEvent("alerts") {
+		t.Fatal("alerts should not be enabled with NOTIFY_EVENTS=actions")
+	}
+	on := NewDispatcher(&config.Config{CurlTimeout: 5, NotifyEvents: "actions,alerts"}, logging.New(false))
+	if !on.hasEvent("alerts") {
+		t.Fatal("alerts should be enabled with NOTIFY_EVENTS=actions,alerts")
+	}
+}
