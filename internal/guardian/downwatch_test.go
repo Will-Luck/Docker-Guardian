@@ -74,7 +74,7 @@ func TestCheckDown_RecoveryAfterGraceNoAlert(t *testing.T) {
 	clk := newMockClock(time.Unix(1_000_000, 0))
 	g := newTestGuardian(cfg, dock, n, clk)
 	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "die"})
-	clk.Advance(200 * time.Second) // past the 120s grace
+	clk.Advance(200 * time.Second)                                                                                                 // past the 120s grace
 	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "start"}) // clearDown must remove the down record
 	g.checkDownContainers(context.Background())
 	if got := alertCount(n); got != 0 {
@@ -101,4 +101,22 @@ func alertCount(n *mockNotifier) int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.alerts)
+}
+
+func TestHandleEvent_DestroyClearsDownState(t *testing.T) {
+	cfg := &config.Config{Interval: 5, DownGrace: 120, RestartLoopThreshold: 5, RestartLoopWindow: 300}
+	n := &mockNotifier{}
+	dock := newMockDocker()
+	// Seed a would-alert inspect so this proves destroy cleared the down record:
+	// if it did not, the post-grace check would inspect this and fire an alert.
+	dock.inspectResults["radarr-id"] = inspectDown("radarr", "unless-stopped", false)
+	clk := newMockClock(time.Unix(1_000_000, 0))
+	g := newTestGuardian(cfg, dock, n, clk)
+	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "die"})
+	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "destroy"})
+	clk.Advance(200 * time.Second)
+	g.checkDownContainers(context.Background())
+	if got := alertCount(n); got != 0 {
+		t.Fatalf("destroy must clear down state (no alert), got %d", got)
+	}
 }

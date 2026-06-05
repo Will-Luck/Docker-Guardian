@@ -208,14 +208,20 @@ func (g *Guardian) handleEvent(ctx context.Context, evt docker.ContainerEvent) {
 		g.debounce(ctx, "dep:"+evt.ContainerID, func() {
 			g.checkOrphanedDependents(ctx, evt.ContainerID)
 		})
+		// Crash-loop tracking is keyed by NAME (survives container-ID churn across
+		// recreates); down tracking is keyed by ID (we inspect that exact instance).
 		if g.loop.recordDeath(evt.ContainerName, g.clock.Now()) {
 			g.notifier.Alert(fmt.Sprintf("[CRITICAL] %s crash-looping: %d+ deaths within %ds",
 				evt.ContainerName, g.cfg.RestartLoopThreshold, g.cfg.RestartLoopWindow))
 		}
 		g.markDown(evt.ContainerID)
 
-	case "create", "destroy":
+	case "create":
 		g.recordOrchestrationActivity(evt)
+
+	case "destroy":
+		g.recordOrchestrationActivity(evt)
+		g.clearDown(evt.ContainerID) // removed container: drop any down-tracking state
 
 	case "start":
 		go g.handleCascadeRestart(ctx, evt.ContainerID)
