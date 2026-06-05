@@ -11,14 +11,7 @@ import (
 )
 
 func newTestGuardian(cfg *config.Config, dock *mockDocker, notif *mockNotifier, clk *mockClock) *Guardian {
-	return &Guardian{
-		cfg:      cfg,
-		docker:   dock,
-		notifier: notif,
-		log:      logging.New(false),
-		clock:    clk,
-		tracker:  NewRestartTracker(DefaultTrackerConfig(), clk),
-	}
+	return NewWithClock(cfg, dock, notif, logging.New(false), clk)
 }
 
 func TestShouldSkip_NoGuards(t *testing.T) {

@@ -208,7 +208,7 @@ func (g *Guardian) handleEvent(ctx context.Context, evt docker.ContainerEvent) {
 		g.debounce(ctx, "dep:"+evt.ContainerID, func() {
 			g.checkOrphanedDependents(ctx, evt.ContainerID)
 		})
-		if g.loop != nil && g.loop.recordDeath(evt.ContainerName, g.clock.Now()) {
+		if g.loop.recordDeath(evt.ContainerName, g.clock.Now()) {
 			g.notifier.Alert(fmt.Sprintf("[CRITICAL] %s crash-looping: %d+ deaths within %ds",
 				evt.ContainerName, g.cfg.RestartLoopThreshold, g.cfg.RestartLoopWindow))
 		}

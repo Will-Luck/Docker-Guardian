@@ -63,15 +63,17 @@ func TestCheckDown_AlertsAfterGraceForUnlessStopped(t *testing.T) {
 	}
 }
 
-func TestCheckDown_RecoveryBeforeGraceNoAlert(t *testing.T) {
+func TestCheckDown_RecoveryAfterGraceNoAlert(t *testing.T) {
 	cfg := &config.Config{Interval: 5, DownGrace: 120, RestartLoopThreshold: 5, RestartLoopWindow: 300}
 	n := &mockNotifier{}
-	g := NewWithClock(cfg, newMockDocker(), n, logging.New(false), newMockClock(time.Unix(1_000_000, 0)))
+	clk := newMockClock(time.Unix(1_000_000, 0))
+	g := newTestGuardian(cfg, newMockDocker(), n, clk)
 	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "die"})
-	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "start"})
+	clk.Advance(200 * time.Second) // past the 120s grace
+	g.handleEvent(context.Background(), docker.ContainerEvent{ContainerID: "radarr-id", ContainerName: "radarr", Action: "start"}) // clearDown must remove the down record
 	g.checkDownContainers(context.Background())
 	if got := alertCount(n); got != 0 {
-		t.Fatalf("recovery before grace must not alert, got %d", got)
+		t.Fatalf("start after grace must clear down state (no alert), got %d", got)
 	}
 }
 
