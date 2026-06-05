@@ -14,10 +14,10 @@ func TestResolvedNotifyEvents(t *testing.T) {
 		expected []string
 	}{
 		{"actions only", "actions", []string{"actions"}},
-		{"all shorthand", "all", []string{"startup", "actions", "skips"}},
-		{"debug shorthand", "debug", []string{"startup", "actions", "skips", "debug"}},
+		{"all shorthand", "all", []string{"startup", "actions", "skips", "alerts"}},
+		{"debug shorthand", "debug", []string{"startup", "actions", "skips", "alerts", "debug"}},
 		{"numeric 2", "2", []string{"actions"}},
-		{"numeric 5", "5", []string{"startup", "actions", "skips", "debug"}},
+		{"numeric 5", "5", []string{"startup", "actions", "skips", "alerts", "debug"}},
 		{"csv", "startup,actions,skips", []string{"startup", "actions", "skips"}},
 		{"failures category", "failures", []string{"failures"}},
 		{"mixed csv", "1,2", []string{"startup", "actions"}},
@@ -100,4 +100,22 @@ func TestEnvBool(t *testing.T) {
 	if got := envBool(key, true); !got {
 		t.Errorf("got false, want true (default on parse failure)")
 	}
+}
+
+func TestResolvedNotifyEvents_Alerts(t *testing.T) {
+	if got := (&Config{NotifyEvents: "actions,alerts"}).ResolvedNotifyEvents(); !contains(got, "alerts") {
+		t.Fatalf("expected alerts in %v", got)
+	}
+	if got := (&Config{NotifyEvents: "all"}).ResolvedNotifyEvents(); !contains(got, "alerts") {
+		t.Fatalf("expected alerts included in 'all', got %v", got)
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

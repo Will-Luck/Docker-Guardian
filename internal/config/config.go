@@ -51,6 +51,12 @@ type Config struct {
 	RestartBudget     int
 	RestartWindow     int // seconds
 
+	// Crash-loop / down detection (Docker-policy restarts guardian does not perform)
+	RestartLoopThreshold int    // deaths within window before a crash-loop alert
+	RestartLoopWindow    int    // seconds
+	DownGrace            int    // seconds a meant-to-be-up container may stay down before a down alert
+	ExpectedUp           string // comma-separated container names to down-watch even if restart=no
+
 	// Post-restart script
 	PostRestartScript string
 
@@ -129,6 +135,11 @@ func Load() *Config {
 		RestartBudget:     envInt("AUTOHEAL_RESTART_BUDGET", 5),
 		RestartWindow:     envInt("AUTOHEAL_RESTART_WINDOW", 300),
 
+		RestartLoopThreshold: envInt("AUTOHEAL_RESTARTLOOP_THRESHOLD", 5),
+		RestartLoopWindow:    envInt("AUTOHEAL_RESTARTLOOP_WINDOW", 300),
+		DownGrace:            envInt("AUTOHEAL_DOWN_GRACE", 120),
+		ExpectedUp:           envStr("AUTOHEAL_EXPECTED_UP", ""),
+
 		PostRestartScript: envStr("POST_RESTART_SCRIPT", ""),
 		NotifyEvents:      envStr("NOTIFY_EVENTS", "actions"),
 		NotifyRateLimit:   envInt("NOTIFY_RATE_LIMIT", 60),
@@ -188,6 +199,10 @@ func (c *Config) PrintBanner() {
 	fmt.Println("AUTOHEAL_BACKOFF_RESET_AFTER=" + strconv.Itoa(c.BackoffResetAfter))
 	fmt.Println("AUTOHEAL_RESTART_BUDGET=" + strconv.Itoa(c.RestartBudget))
 	fmt.Println("AUTOHEAL_RESTART_WINDOW=" + strconv.Itoa(c.RestartWindow))
+	fmt.Println("AUTOHEAL_RESTARTLOOP_THRESHOLD=" + strconv.Itoa(c.RestartLoopThreshold))
+	fmt.Println("AUTOHEAL_RESTARTLOOP_WINDOW=" + strconv.Itoa(c.RestartLoopWindow))
+	fmt.Println("AUTOHEAL_DOWN_GRACE=" + strconv.Itoa(c.DownGrace))
+	fmt.Println("AUTOHEAL_EXPECTED_UP=" + c.ExpectedUp)
 }
 
 // ResolvedNotifyEvents returns the normalised event categories.
@@ -195,9 +210,9 @@ func (c *Config) ResolvedNotifyEvents() []string {
 	raw := strings.TrimSpace(c.NotifyEvents)
 	switch raw {
 	case "all":
-		return []string{"startup", "actions", "skips"}
+		return []string{"startup", "actions", "skips", "alerts"}
 	case "debug":
-		return []string{"startup", "actions", "skips", "debug"}
+		return []string{"startup", "actions", "skips", "alerts", "debug"}
 	}
 
 	var result []string
@@ -213,9 +228,11 @@ func (c *Config) ResolvedNotifyEvents() []string {
 		case "4", "skips":
 			result = append(result, "skips")
 		case "5", "debug":
-			result = append(result, "startup", "actions", "skips", "debug")
+			result = append(result, "startup", "actions", "skips", "alerts", "debug")
+		case "6", "alerts":
+			result = append(result, "alerts")
 		case "all":
-			result = append(result, "startup", "actions", "skips")
+			result = append(result, "startup", "actions", "skips", "alerts")
 		}
 	}
 	return result
