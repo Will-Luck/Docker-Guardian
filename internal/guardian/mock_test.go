@@ -201,8 +201,12 @@ func (m *mockNotifier) Close() {
 	m.mu.Unlock()
 }
 
-// mockClock implements clock.Clock for testing.
+// mockClock implements clock.Clock for testing. It is concurrency-safe because
+// the guardian reads the clock from background goroutines (e.g. the
+// pruneOrchestrationEvents goroutine spawned on create/destroy events) while a
+// test may concurrently Advance it.
 type mockClock struct {
+	mu  sync.Mutex
 	now time.Time
 }
 
@@ -210,14 +214,29 @@ func newMockClock(t time.Time) *mockClock {
 	return &mockClock{now: t}
 }
 
-func (c *mockClock) Now() time.Time { return c.now }
+func (c *mockClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
 func (c *mockClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	n := c.now
+	c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	ch <- c.now.Add(d)
+	ch <- n.Add(d)
 	return ch
 }
-func (c *mockClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
-func (c *mockClock) Advance(d time.Duration)         { c.now = c.now.Add(d) }
+func (c *mockClock) Since(t time.Time) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now.Sub(t)
+}
+func (c *mockClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
 
 // blockingClock is a clock whose After() never fires, for testing context cancellation.
 type blockingClock struct {
