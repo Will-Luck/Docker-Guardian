@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.4.0] - 2026-06-05
+
+### Added
+- **Crash-loop detection**: alerts when a container restarts via Docker's own restart policy `AUTOHEAL_RESTARTLOOP_THRESHOLD` (default 5) times within `AUTOHEAL_RESTARTLOOP_WINDOW` seconds (default 300). Catches loops on containers that have no Docker healthcheck, which the autoheal path cannot see. One alert per loop episode, re-armed after a quiet window.
+- **Down-container detection**: alerts when a container whose restart policy is `unless-stopped`/`always` (or whose name is listed in `AUTOHEAL_EXPECTED_UP`) stays down longer than `AUTOHEAL_DOWN_GRACE` seconds (default 120). One alert per down episode, cleared on recovery.
+- **`alerts` notification category** and `Notifier.Alert()`: enable proactive crash-loop/down alerts with `NOTIFY_EVENTS=actions,alerts`. Reuses the existing Gotify/Discord/Slack/etc. dispatcher and rate-limiting.
+- **Network-namespace cascade restart**: when a parent providing the network namespace (`network_mode: container:X`, e.g. a VPN sidecar) restarts, its dependents are restarted too. Controlled by `AUTOHEAL_CASCADE_RESTART` and `AUTOHEAL_CASCADE_SETTLE_DELAY`.
+- **Network healthcheck**: periodically pings `AUTOHEAL_NETWORK_HEALTHCHECK_TARGET` from inside monitored containers and restarts on failure. Controlled by `AUTOHEAL_NETWORK_HEALTHCHECK`.
+
+### Changed
+- CI split into `ci.yml` + `release.yml`; GitHub-only steps (upload-artifact, trivy) are skipped on the Gitea runner.
+- LICENSE copyright holder updated.
+
+### Fixed
+- Network healthcheck false positive when the `ping` binary is missing from the container image.
+- Bumped Go 1.24 to 1.25 to clear govulncheck CVEs in `net/url`.
+
+## [2.3.0] - 2026-02-10
+
+### Changed
+- **Complete rewrite from shell to Go**, shipped as a multi-arch image; legacy v1 shell code removed and the build context tightened. README split into a slim overview plus a `docs/` reference.
+- Backup-container detection replaced with a time-based timeout.
+
+### Added
+- GitHub Releases with cross-compiled multi-arch binaries and README badges.
+
+### Fixed
+- Orchestration event filter now keys on `event` rather than `action`.
+- Custom-label test SIGPIPE failure under `pipefail`; gofmt formatting in config and guards.
+
 ## [2.2.0] - 2026-02-08
 
 ### Added
