@@ -2,6 +2,8 @@ package guardian
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,13 @@ type Guardian struct {
 	orchestratorEvents []events.Message
 	orchestratorCached bool
 	cycle              int
+
+	// Crash-loop / down detection (Docker-policy restarts)
+	loop        *loopWatch
+	downMu      sync.Mutex
+	downSince   map[string]time.Time // container ID -> first death of current down episode
+	downAlerted map[string]bool      // container ID -> alerted this episode
+	expectedUp  map[string]bool      // names down-watched regardless of restart policy
 }
 
 // New creates a Guardian instance.
@@ -57,6 +66,10 @@ func New(cfg *config.Config, client docker.API, notifier notify.Notifier, log *l
 		tracker:             NewRestartTracker(tcfg, clk),
 		debounceTimers:      make(map[string]*time.Timer),
 		orchestrationEvents: make(map[string]time.Time),
+		loop:                newLoopWatch(cfg.RestartLoopThreshold, cfg.RestartLoopWindow),
+		downSince:           make(map[string]time.Time),
+		downAlerted:         make(map[string]bool),
+		expectedUp:          parseSet(cfg.ExpectedUp),
 	}
 }
 
@@ -154,12 +167,18 @@ func (g *Guardian) handleEvent(ctx context.Context, evt docker.ContainerEvent) {
 		g.debounce(ctx, "dep:"+evt.ContainerID, func() {
 			g.checkOrphanedDependents(ctx, evt.ContainerID)
 		})
+		if g.loop != nil && g.loop.recordDeath(evt.ContainerName, g.clock.Now()) {
+			g.notifier.Alert(fmt.Sprintf("[CRITICAL] %s crash-looping: %d+ deaths within %ds",
+				evt.ContainerName, g.cfg.RestartLoopThreshold, g.cfg.RestartLoopWindow))
+		}
+		g.markDown(evt.ContainerID)
 
 	case "create", "destroy":
 		g.recordOrchestrationActivity(evt)
 
 	case "start":
 		go g.handleCascadeRestart(ctx, evt.ContainerID)
+		g.clearDown(evt.ContainerID)
 	}
 }
 
@@ -239,4 +258,30 @@ func (g *Guardian) UnhealthyCount(ctx context.Context) int {
 		return 0
 	}
 	return len(containers)
+}
+
+// parseSet turns a comma-separated list into a name set.
+func parseSet(csv string) map[string]bool {
+	out := make(map[string]bool)
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+func (g *Guardian) markDown(id string) {
+	g.downMu.Lock()
+	if _, ok := g.downSince[id]; !ok {
+		g.downSince[id] = g.clock.Now()
+	}
+	g.downMu.Unlock()
+}
+
+func (g *Guardian) clearDown(id string) {
+	g.downMu.Lock()
+	delete(g.downSince, id)
+	delete(g.downAlerted, id)
+	g.downMu.Unlock()
 }
