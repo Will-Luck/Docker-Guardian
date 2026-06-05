@@ -84,6 +84,7 @@ Docker-Guardian detects this and restarts them automatically.
 | `AUTOHEAL_CASCADE_SETTLE_DELAY` | `15` | Seconds to wait after parent starts before cascading |
 | `AUTOHEAL_NETWORK_HEALTHCHECK` | `true` | Periodic ping check for containers sharing a network namespace |
 | `AUTOHEAL_NETWORK_HEALTHCHECK_TARGET` | `8.8.8.8` | IP to ping for network health checks |
+| `AUTOHEAL_NETWORK_HEALTHCHECK_FAILURES` | `3` | Consecutive ping failures before restart (needs one prior success as baseline) |
 | `NOTIFY_HOSTNAME` | _(empty)_ | Prefix notifications with `[hostname]` |
 | `METRICS_PORT` | `0` | Prometheus metrics port (`0` = disabled) |
 | `TZ` | _(empty)_ | Timezone (e.g. `Europe/London`) |

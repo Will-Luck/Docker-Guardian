@@ -11,6 +11,8 @@ GUARDIAN_IMAGE="${GUARDIAN_IMAGE:-docker-guardian}"
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-guardian-label > /tmp/dg-test-logs/dg-test-guardian-label.log 2>&1 || true
   docker rm -f dg-test-label-monitored dg-test-label-ignored dg-test-guardian-label 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -69,6 +71,7 @@ echo "Starting Guardian with AUTOHEAL_CONTAINER_LABEL=my-monitor..."
 docker run -d \
   --name dg-test-guardian-label \
   -e AUTOHEAL_CONTAINER_LABEL=my-monitor \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

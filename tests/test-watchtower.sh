@@ -13,6 +13,8 @@ COOLDOWN=10  # Short for testing
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-guardian-wt > /tmp/dg-test-logs/dg-test-guardian-wt.log 2>&1 || true
   docker rm -f dg-test-wt-parent dg-test-wt-dependent dg-test-wt-dummy dg-test-guardian-wt 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -56,6 +58,7 @@ echo "Starting Docker-Guardian (watchtower_cooldown=${COOLDOWN}s)..."
 docker run -d \
   --name dg-test-guardian-wt \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=$COOLDOWN \
@@ -106,6 +109,7 @@ echo "Starting Docker-Guardian (watchtower_cooldown=0, disabled)..."
 docker run -d \
   --name dg-test-guardian-wt \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

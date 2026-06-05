@@ -3,11 +3,13 @@ package guardian
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Will-Luck/Docker-Guardian/internal/config"
+	"github.com/Will-Luck/Docker-Guardian/internal/docker"
 	"github.com/Will-Luck/Docker-Guardian/internal/logging"
 	"github.com/moby/moby/api/types/container"
 )
@@ -630,13 +632,14 @@ func TestCascadeRestartSettleDelay(t *testing.T) {
 
 func TestNetworkHealthcheckRestartsUnreachable(t *testing.T) {
 	cfg := &config.Config{
-		NetworkHealthcheck:       true,
-		NetworkHealthcheckTarget: "8.8.8.8",
-		MonitorDependencies:      true,
-		DefaultStopTimeout:       10,
-		WatchtowerCooldown:       0,
-		GracePeriod:              0,
-		BackupLabel:              "",
+		NetworkHealthcheck:         true,
+		NetworkHealthcheckTarget:   "8.8.8.8",
+		NetworkHealthcheckFailures: 1,
+		MonitorDependencies:        true,
+		DefaultStopTimeout:         10,
+		WatchtowerCooldown:         0,
+		GracePeriod:                0,
+		BackupLabel:                "",
 	}
 	dock := newMockDocker()
 	notif := &mockNotifier{}
@@ -660,9 +663,6 @@ func TestNetworkHealthcheckRestartsUnreachable(t *testing.T) {
 		State: &container.State{},
 	}
 
-	// Ping fails — network is broken
-	dock.execPingErr[depID] = errors.New("ping: bad address")
-
 	g := &Guardian{
 		cfg:                 cfg,
 		docker:              dock,
@@ -672,6 +672,12 @@ func TestNetworkHealthcheckRestartsUnreachable(t *testing.T) {
 		tracker:             NewRestartTracker(DefaultTrackerConfig(), clk),
 		orchestrationEvents: make(map[string]time.Time),
 	}
+
+	// Baseline scan: ping succeeds, container is known-reachable.
+	g.checkNetworkHealth(context.Background())
+
+	// Ping fails — network is broken
+	dock.execPingErr[depID] = fmt.Errorf("%w: ping exited with code 1", docker.ErrPingFailed)
 
 	g.checkNetworkHealth(context.Background())
 

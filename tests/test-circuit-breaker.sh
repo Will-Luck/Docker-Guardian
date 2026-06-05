@@ -11,6 +11,8 @@ GUARDIAN_IMAGE="${GUARDIAN_IMAGE:-docker-guardian}"
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-guardian-cb > /tmp/dg-test-logs/dg-test-guardian-cb.log 2>&1 || true
   docker rm -f dg-test-cb-target dg-test-guardian-cb 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -55,6 +57,7 @@ PASS=$((PASS + 1))
 docker run -d \
   --name dg-test-guardian-cb \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

@@ -28,10 +28,11 @@ type Config struct {
 	DependencyStartDelay int // seconds
 
 	// Cascade restart (network namespace dependents)
-	CascadeRestart           bool
-	CascadeSettleDelay       int // seconds to wait after parent starts before cascading
-	NetworkHealthcheck       bool
-	NetworkHealthcheckTarget string // IP to ping for health checks
+	CascadeRestart             bool
+	CascadeSettleDelay         int // seconds to wait after parent starts before cascading
+	NetworkHealthcheck         bool
+	NetworkHealthcheckTarget   string // IP to ping for health checks
+	NetworkHealthcheckFailures int    // consecutive ping failures before restart
 
 	BackupLabel        string
 	BackupContainer    string
@@ -114,10 +115,11 @@ func Load() *Config {
 		MonitorDependencies:  envBool("AUTOHEAL_MONITOR_DEPENDENCIES", true),
 		DependencyStartDelay: envInt("AUTOHEAL_DEPENDENCY_START_DELAY", 5),
 
-		CascadeRestart:           envBool("AUTOHEAL_CASCADE_RESTART", true),
-		CascadeSettleDelay:       envInt("AUTOHEAL_CASCADE_SETTLE_DELAY", 15),
-		NetworkHealthcheck:       envBool("AUTOHEAL_NETWORK_HEALTHCHECK", true),
-		NetworkHealthcheckTarget: envStr("AUTOHEAL_NETWORK_HEALTHCHECK_TARGET", "8.8.8.8"),
+		CascadeRestart:             envBool("AUTOHEAL_CASCADE_RESTART", true),
+		CascadeSettleDelay:         envInt("AUTOHEAL_CASCADE_SETTLE_DELAY", 15),
+		NetworkHealthcheck:         envBool("AUTOHEAL_NETWORK_HEALTHCHECK", true),
+		NetworkHealthcheckTarget:   envStr("AUTOHEAL_NETWORK_HEALTHCHECK_TARGET", "8.8.8.8"),
+		NetworkHealthcheckFailures: envInt("AUTOHEAL_NETWORK_HEALTHCHECK_FAILURES", 3),
 
 		BackupLabel:        envStr("AUTOHEAL_BACKUP_LABEL", "docker-volume-backup.stop-during-backup"),
 		BackupContainer:    envStr("AUTOHEAL_BACKUP_CONTAINER", ""),
@@ -249,6 +251,9 @@ func (c *Config) Validate() error {
 	}
 	if c.UnhealthyThreshold < 1 {
 		errs = append(errs, fmt.Errorf("AUTOHEAL_UNHEALTHY_THRESHOLD must be >= 1, got %d", c.UnhealthyThreshold))
+	}
+	if c.NetworkHealthcheckFailures < 1 {
+		errs = append(errs, fmt.Errorf("AUTOHEAL_NETWORK_HEALTHCHECK_FAILURES must be >= 1, got %d", c.NetworkHealthcheckFailures))
 	}
 	if c.DefaultStopTimeout < 0 {
 		errs = append(errs, fmt.Errorf("AUTOHEAL_DEFAULT_STOP_TIMEOUT must be >= 0, got %d", c.DefaultStopTimeout))

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,12 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
+
+// ErrPingFailed marks a ping probe that ran and exited non-zero, as opposed
+// to exec infrastructure errors (container stopping, missing binary, daemon
+// hiccup). Callers use errors.Is to tell genuine connectivity failures apart
+// from probes that never ran.
+var ErrPingFailed = errors.New("ping failed")
 
 // UnhealthyContainers returns containers with health status "unhealthy",
 // optionally filtered by label and running status.
@@ -183,7 +190,7 @@ func (c *Client) ExecPing(ctx context.Context, containerID string, target string
 		}
 		if !inspect.Running {
 			if inspect.ExitCode != 0 {
-				return fmt.Errorf("ping exited with code %d", inspect.ExitCode)
+				return fmt.Errorf("%w: ping exited with code %d", ErrPingFailed, inspect.ExitCode)
 			}
 			return nil
 		}

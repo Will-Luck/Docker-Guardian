@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.1] - 2026-06-05
+
+### Fixed
+- **Network healthcheck restart-loop on ICMP-blocked networks**: restarts now require a successful-ping baseline plus `AUTOHEAL_NETWORK_HEALTHCHECK_FAILURES` (default 3) consecutive genuine failures. Previously a single failed ping restarted the container immediately, so environments that block outbound ICMP (GitHub Actions runners, strict corporate egress) restart-looped every `container:X` dependent. Containers whose ping has never succeeded are left alone with a one-time warning.
+- **Exec errors no longer count as ping failures**: probes that could not run (container stopping, daemon error) are ignored instead of triggering a restart. Previously this raced `docker stop` and could start a container the operator had just stopped, bypassing the grace period - the cause of the grace-period test failure in GitHub CI.
+
+### Changed
+- Integration test scripts set `AUTOHEAL_NETWORK_HEALTHCHECK=false` (none of them test it) so results don't depend on the runner's ICMP egress policy, and dump guardian logs to `/tmp/dg-test-logs/` for the CI failure artifact.
+- CI `setup-go` uses `check-latest: true` so govulncheck runs on the newest Go patch release (clears GO-2026-5037 / GO-2026-5039, fixed in go1.25.11).
+
 ## [2.4.0] - 2026-06-05
 
 ### Added
@@ -43,8 +53,8 @@
 ## [1.2.0] - 2026-02-08
 
 ### Added
-- **Native multi-service notifications**: Gotify, Discord, Slack, Telegram, Pushover, Pushbullet, LunaSea, and Email — all via pure `curl`, no extra dependencies
-- `NOTIFY_EVENTS` env var — controls which events trigger notifications: `startup`, `actions`, `failures`, `skips`, `debug`, or numbered (`1`-`5`)
+- **Native multi-service notifications**: Gotify, Discord, Slack, Telegram, Pushover, Pushbullet, LunaSea, and Email - all via pure `curl`, no extra dependencies
+- `NOTIFY_EVENTS` env var - controls which events trigger notifications: `startup`, `actions`, `failures`, `skips`, `debug`, or numbered (`1`-`5`)
 - Event filtering: `notify_webhook()` checks event category before dispatching, `notify_skip()` for skip events, `notify_startup()` for boot confirmation
 - Debug mode (`NOTIFY_EVENTS=debug`): logs every dispatch with `[notify] → service: message` to console
 - Startup notification: sends boot confirmation when `startup` event is enabled
@@ -59,9 +69,9 @@
 
 ### Added
 - **Watchtower awareness**: detects active orchestration (Watchtower, manual recreates) via Docker events API and pauses monitoring during the cooldown window
-- `AUTOHEAL_WATCHTOWER_COOLDOWN` env var (default 300s) — cooldown window after orchestration events
-- `AUTOHEAL_WATCHTOWER_SCOPE` env var (default `all`) — skip all containers or only affected ones
-- `AUTOHEAL_WATCHTOWER_EVENTS` env var (default `orchestration`) — watch destroy+create events only or all lifecycle events
+- `AUTOHEAL_WATCHTOWER_COOLDOWN` env var (default 300s) - cooldown window after orchestration events
+- `AUTOHEAL_WATCHTOWER_SCOPE` env var (default `all`) - skip all containers or only affected ones
+- `AUTOHEAL_WATCHTOWER_EVENTS` env var (default `orchestration`) - watch destroy+create events only or all lifecycle events
 - Per-cycle orchestration event caching (single API call, same pattern as backup check)
 - Test suite: `test-watchtower.sh`
 

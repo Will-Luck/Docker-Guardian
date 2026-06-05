@@ -45,6 +45,7 @@ func TestCascadeRestartDefaults(t *testing.T) {
 	assert.Equal(t, 15, cfg.CascadeSettleDelay)
 	assert.True(t, cfg.NetworkHealthcheck)
 	assert.Equal(t, "8.8.8.8", cfg.NetworkHealthcheckTarget)
+	assert.Equal(t, 3, cfg.NetworkHealthcheckFailures)
 }
 
 func TestCascadeRestartFromEnv(t *testing.T) {
@@ -52,11 +53,13 @@ func TestCascadeRestartFromEnv(t *testing.T) {
 	t.Setenv("AUTOHEAL_CASCADE_SETTLE_DELAY", "30")
 	t.Setenv("AUTOHEAL_NETWORK_HEALTHCHECK", "false")
 	t.Setenv("AUTOHEAL_NETWORK_HEALTHCHECK_TARGET", "1.1.1.1")
+	t.Setenv("AUTOHEAL_NETWORK_HEALTHCHECK_FAILURES", "5")
 	cfg := Load()
 	assert.False(t, cfg.CascadeRestart)
 	assert.Equal(t, 30, cfg.CascadeSettleDelay)
 	assert.False(t, cfg.NetworkHealthcheck)
 	assert.Equal(t, "1.1.1.1", cfg.NetworkHealthcheckTarget)
+	assert.Equal(t, 5, cfg.NetworkHealthcheckFailures)
 }
 
 func TestEnvStr(t *testing.T) {

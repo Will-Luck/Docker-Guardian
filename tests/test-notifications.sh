@@ -11,6 +11,8 @@ GUARDIAN_IMAGE="${GUARDIAN_IMAGE:-docker-guardian}"
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-notify-guardian > /tmp/dg-test-logs/dg-test-notify-guardian.log 2>&1 || true
   docker rm -f dg-test-notify-guardian dg-test-notify-parent dg-test-notify-dep 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -27,6 +29,7 @@ echo "--- Test 1: Startup logging shows configured Gotify service ---"
 docker run -d \
   --name dg-test-notify-guardian \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \
@@ -102,6 +105,7 @@ docker stop -t 1 dg-test-notify-dep
 docker run -d \
   --name dg-test-notify-guardian \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

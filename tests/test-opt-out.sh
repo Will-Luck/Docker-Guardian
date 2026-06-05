@@ -11,6 +11,8 @@ GUARDIAN_IMAGE="${GUARDIAN_IMAGE:-docker-guardian}"
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-guardian-optout > /tmp/dg-test-logs/dg-test-guardian-optout.log 2>&1 || true
   docker rm -f dg-test-optout-target dg-test-optout-monitored dg-test-guardian-optout 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -58,6 +60,7 @@ STARTED_AT_BEFORE=$(docker inspect -f '{{.State.StartedAt}}' dg-test-optout-targ
 docker run -d \
   --name dg-test-guardian-optout \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=0 \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

@@ -12,6 +12,8 @@ GRACE_PERIOD=15  # Short for testing
 
 cleanup() {
   echo "Cleaning up..."
+  mkdir -p /tmp/dg-test-logs
+  docker logs dg-test-guardian-grace > /tmp/dg-test-logs/dg-test-guardian-grace.log 2>&1 || true
   docker rm -f dg-test-grace-parent dg-test-grace-dependent dg-test-guardian-grace 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -41,6 +43,7 @@ echo "Starting Docker-Guardian (grace_period=${GRACE_PERIOD}s)..."
 docker run -d \
   --name dg-test-guardian-grace \
   -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e AUTOHEAL_NETWORK_HEALTHCHECK=false \
   -e AUTOHEAL_INTERVAL=3 \
   -e AUTOHEAL_GRACE_PERIOD=$GRACE_PERIOD \
   -e AUTOHEAL_WATCHTOWER_COOLDOWN=0 \

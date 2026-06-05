@@ -2,9 +2,12 @@ package guardian
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Will-Luck/Docker-Guardian/internal/docker"
 )
 
 // handleCascadeRestart restarts all running containers sharing a network namespace
@@ -79,9 +82,23 @@ func (g *Guardian) handleCascadeRestart(ctx context.Context, parentID string) {
 // checkNetworkHealth probes containers that share a network namespace to
 // verify they still have working connectivity. Safety net for cases where
 // the event-driven cascade misses a parent restart.
+//
+// A restart needs a baseline (the container has pinged successfully at
+// least once) plus NetworkHealthcheckFailures consecutive genuine ping
+// failures. Without the baseline a failing ping means the environment
+// blocks ICMP (CI runners, strict egress), not that the namespace died -
+// restarting would loop every monitored dependent forever.
 func (g *Guardian) checkNetworkHealth(ctx context.Context) {
 	if !g.cfg.NetworkHealthcheck || !g.cfg.MonitorDependencies {
 		return
+	}
+
+	// Tests build Guardian literals without New(); state lives on the
+	// run-loop goroutine only, so lazy init is race-free.
+	if g.pingBaseline == nil {
+		g.pingBaseline = make(map[string]bool)
+		g.pingFailures = make(map[string]int)
+		g.pingWarned = make(map[string]bool)
 	}
 
 	running, err := g.docker.RunningContainers(ctx)
@@ -105,11 +122,39 @@ func (g *Guardian) checkNetworkHealth(ctx context.Context) {
 
 		// Probe network connectivity
 		if err := g.docker.ExecPing(ctx, c.ID, g.cfg.NetworkHealthcheckTarget); err != nil {
-			// Container doesn't have ping installed — skip it, not a network issue
+			// Container doesn't have ping installed - skip it, not a network issue
 			if strings.Contains(err.Error(), "executable file not found") ||
 				strings.Contains(err.Error(), "not found in $PATH") {
 				g.log.Debug("network health: ping not available, skipping",
 					"name", name, "error", err)
+				continue
+			}
+
+			// Exec infrastructure error (container stopping, daemon hiccup):
+			// the probe never ran, so it says nothing about connectivity.
+			if !errors.Is(err, docker.ErrPingFailed) {
+				g.log.Debug("network health: probe could not run, skipping",
+					"name", name, "error", err)
+				continue
+			}
+
+			// No baseline: ping has never succeeded for this container, so
+			// the failure is environmental. Warn once and leave it alone.
+			if !g.pingBaseline[c.ID] {
+				if !g.pingWarned[c.ID] {
+					g.pingWarned[c.ID] = true
+					g.log.Warn("network health: ping to target has never succeeded; check ICMP egress or AUTOHEAL_NETWORK_HEALTHCHECK_TARGET - healthcheck inactive for this container",
+						"name", name, "target", g.cfg.NetworkHealthcheckTarget)
+				}
+				continue
+			}
+
+			g.pingFailures[c.ID]++
+			if g.pingFailures[c.ID] < g.cfg.NetworkHealthcheckFailures {
+				g.log.Warn("network health: ping failed",
+					"name", name, "target", g.cfg.NetworkHealthcheckTarget,
+					"consecutive", g.pingFailures[c.ID], "threshold", g.cfg.NetworkHealthcheckFailures,
+					"error", err)
 				continue
 			}
 
@@ -140,10 +185,15 @@ func (g *Guardian) checkNetworkHealth(ctx context.Context) {
 			}
 
 			g.tracker.RecordRestart(c.ID)
+			g.pingFailures[c.ID] = 0
 			g.notifier.Action(fmt.Sprintf("Network health: container %s (%s) restarted (ping to %s failed)",
 				name, shortID, g.cfg.NetworkHealthcheckTarget))
 			fmt.Printf("%s network health: restarted %s (%s)\n", now, name, shortID)
 			g.runPostRestartScript(name, shortID, "network-health", timeout)
+		} else {
+			// Successful probe: record the baseline and clear any streak.
+			g.pingBaseline[c.ID] = true
+			g.pingFailures[c.ID] = 0
 		}
 	}
 }

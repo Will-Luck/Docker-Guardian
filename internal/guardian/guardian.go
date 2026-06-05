@@ -45,6 +45,14 @@ type Guardian struct {
 	downSince   map[string]time.Time // container ID -> first death of current down episode
 	downAlerted map[string]bool      // container ID -> alerted this episode
 	expectedUp  map[string]bool      // names down-watched regardless of restart policy
+
+	// Network healthcheck state (only touched on the run-loop goroutine).
+	// A container is restart-eligible only after a successful ping (baseline)
+	// followed by N consecutive failures - never-succeeding pings mean the
+	// environment blocks ICMP, not that the namespace died.
+	pingBaseline map[string]bool // container ID -> ping has succeeded at least once
+	pingFailures map[string]int  // container ID -> consecutive ping failures
+	pingWarned   map[string]bool // container ID -> no-baseline warning emitted
 }
 
 // New creates a Guardian instance.
@@ -70,6 +78,9 @@ func New(cfg *config.Config, client docker.API, notifier notify.Notifier, log *l
 		downSince:           make(map[string]time.Time),
 		downAlerted:         make(map[string]bool),
 		expectedUp:          parseSet(cfg.ExpectedUp),
+		pingBaseline:        make(map[string]bool),
+		pingFailures:        make(map[string]int),
+		pingWarned:          make(map[string]bool),
 	}
 }
 
@@ -222,6 +233,7 @@ func (g *Guardian) handleEvent(ctx context.Context, evt docker.ContainerEvent) {
 	case "destroy":
 		g.recordOrchestrationActivity(evt)
 		g.clearDown(evt.ContainerID) // removed container: drop any down-tracking state
+		g.clearPingState(evt.ContainerID)
 
 	case "start":
 		go g.handleCascadeRestart(ctx, evt.ContainerID)
@@ -253,7 +265,7 @@ func (g *Guardian) debounce(ctx context.Context, key string, fn func()) {
 
 // checkContainerByID inspects and potentially restarts a single container.
 func (g *Guardian) checkContainerByID(ctx context.Context, containerID string) {
-	// Use the regular unhealthy check — it re-queries and filters
+	// Use the regular unhealthy check - it re-queries and filters
 	g.orchestratorCached = false
 	g.checkUnhealthy(ctx)
 }
@@ -298,7 +310,7 @@ func (g *Guardian) Tracker() *RestartTracker {
 }
 
 // UnhealthyCount returns the count from the last check (for metrics).
-// This is a simple accessor — the real metric instrumentation happens in Phase 5.
+// This is a simple accessor - the real metric instrumentation happens in Phase 5.
 func (g *Guardian) UnhealthyCount(ctx context.Context) int {
 	containers, err := g.docker.UnhealthyContainers(ctx, g.cfg.ContainerLabel, g.cfg.OnlyMonitorRunning)
 	if err != nil {
@@ -324,6 +336,14 @@ func (g *Guardian) markDown(id string) {
 		g.downSince[id] = g.clock.Now()
 	}
 	g.downMu.Unlock()
+}
+
+// clearPingState drops network-healthcheck tracking for a removed container.
+// Runs on the event-loop goroutine, same as checkNetworkHealth.
+func (g *Guardian) clearPingState(id string) {
+	delete(g.pingBaseline, id)
+	delete(g.pingFailures, id)
+	delete(g.pingWarned, id)
 }
 
 func (g *Guardian) clearDown(id string) {
