@@ -6,8 +6,10 @@ import (
 )
 
 // loopWatch detects crash loops by counting container "die" events within a
-// rolling window. It targets containers restarted by Docker's own policy
-// (which guardian does not itself restart), invisible to the healthcheck path.
+// rolling window. Its main value is catching containers restarted by Docker's
+// own policy, which the healthcheck-based autoheal path never sees. It counts
+// every die (including those from guardian's own restarts); a container
+// guardian has to restart this often is itself loop-like, so the alert holds.
 type loopWatch struct {
 	mu        sync.Mutex
 	threshold int
