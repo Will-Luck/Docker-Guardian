@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `docs/roadmap.md`: release ladder v2.4.2 to v2.7.0, CI hygiene track, and the four-phase Watchtower integration design.
+
 ## [2.4.1] - 2026-06-05
 
 ### Fixed
